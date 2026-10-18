@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Qwen TTS · Estudio de voz</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <header><span class="mark">Q</span><div><p class="eyebrow">QWEN TTS · LOCAL</p><h1>Estudio de voz</h1><p class="muted">Clona una voz, prepara una locución y descarga el MP3.</p></div></header>
+    <section class="panel">
+      <div class="heading"><h2>Servicio</h2><button id="refresh" class="secondary" type="button">Actualizar</button></div>
+      <p id="service-status" role="status">Consultando el servicio…</p>
+      <p id="resource-status" class="muted"></p>
+      <p class="hint">El modelo se carga al generar y se libera al terminar. Comparte turno con la redacción de News Radio.</p>
+    </section>
+    <div class="columns">
+      <section class="panel">
+        <h2>1. Voces de referencia</h2>
+        <p class="muted">Una grabación limpia de una sola persona, sin música. Recomendamos entre 6 y 15 segundos.</p>
+        <form id="voice-form">
+          <label for="voice-name">Nombre de la voz</label><input id="voice-name" maxlength="100" required placeholder="Presentadora principal">
+          <label for="voice-file">Muestra de audio (3–30 segundos, máximo 12 MiB)</label><input id="voice-file" type="file" accept="audio/*" required>
+          <label for="voice-transcript">Transcripción literal de lo que dice la muestra</label><textarea id="voice-transcript" rows="4" maxlength="3000" required></textarea>
+          <button id="voice-save" type="submit">Guardar voz</button>
+        </form>
+        <p id="voice-message" role="status" class="hint"></p>
+        <details><summary>Importar archivos de la carpeta voices</summary><p class="hint">Deja <code>nombre.wav</code> y <code>nombre.txt</code> en <code>/home/marti/docker/qwentts/voices/</code>.</p><button id="voice-import" type="button" class="secondary">Importar carpeta</button></details>
+        <div id="voice-list" class="voice-list"></div>
+      </section>
+      <section class="panel">
+        <h2>2. Generar una locución</h2>
+        <form id="speech-form">
+          <label for="speech-voice">Voz</label><select id="speech-voice" required></select>
+          <label for="speech-language">Idioma del texto</label><select id="speech-language"><option value="Spanish">Español</option></select>
+          <label for="speech-text">Texto que se leerá (máximo 5.000 caracteres)</label><textarea id="speech-text" rows="12" maxlength="5000" minlength="5" required placeholder="Pega aquí el guion revisado de la noticia…"></textarea>
+          <p class="hint">Para la primera locución, utiliza una o dos frases. Los textos largos se dividen en fragmentos y se unen en un único audio.</p>
+          <button id="speech-create" type="submit">Generar MP3</button>
+        </form>
+        <p id="speech-message" role="status" class="hint"></p>
+      </section>
+    </div>
+    <section class="panel"><h2>Locuciones</h2><p class="hint">Puedes cerrar esta página: los trabajos siguen en la cola. Los audios terminados se conservan en disco.</p><div id="jobs" aria-live="polite"></div></section>
+    <footer>Qwen3-TTS 0.6B Base · CPU · WAV y MP3 · Proyecto independiente de News Radio.</footer>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>

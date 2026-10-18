@@ -1,0 +1,7 @@
+.env
+.git
+data
+models
+voices
+__pycache__
+*.pyc

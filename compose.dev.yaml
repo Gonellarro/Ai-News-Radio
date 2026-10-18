@@ -1,0 +1,5 @@
+services:
+  qwentts:
+    volumes:
+      - ./src:/app/src:ro
+      - ./web:/app/web:ro
