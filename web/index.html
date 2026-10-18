@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>News Radio</title><link rel="stylesheet" href="/styles.css"></head>
+<body><main>
+  <header><span class="mark">N</span><div><p class="eyebrow">CANAL AUTOMÁTICO · EMISIÓN LOCAL</p><h1 id="channel-title">Noticias de inteligencia artificial</h1><p class="muted">Noticias, redacción, locución y vídeo en una parrilla que se renueva automáticamente.</p></div><span class="badge">LOCAL</span></header>
+  <div class="columns">
+    <section class="panel player-panel"><div class="heading"><h2>Emisión continua</h2><span id="live-state" class="muted">Conectando…</span></div>
+      <video id="live-video" controls playsinline preload="none"></video>
+      <div class="actions"><button id="play-live" type="button">Ver emisión local</button><a id="stream-link" href="/live/index.m3u8">Abrir flujo HLS</a></div>
+      <p id="player-message" class="hint">Pulsa reproducir para activar imagen y sonido. La emisión continúa aunque cierres la página.</p>
+      <p id="now-playing" class="muted"></p><p class="hint">El reproductor lleva unos segundos de búfer respecto al emisor. Mientras se prepara la primera noticia, verás una pantalla de continuidad.</p>
+    </section>
+    <section class="panel"><h2>Automatización</h2><p id="automatic-state" class="accent">Activa · Sin intervención humana</p><dl id="settings"></dl><button id="scan" type="button">Revisar noticias ahora</button><p id="scan-message" class="hint">La revisión programada es horaria. Se respetan los intervalos y las pausas de cada fuente.</p><p id="scan-summary" class="hint" aria-live="polite"></p><details><summary>Fuentes con incidencias</summary><div id="source-warnings" class="hint"></div></details><p id="service-errors" class="error" role="status"></p></section>
+  </div>
+  <section class="panel" aria-labelledby="youtube-heading">
+    <div class="heading"><h2 id="youtube-heading">Salida a YouTube</h2><span id="youtube-state" class="muted" aria-live="polite">Conectando con el servicio…</span></div>
+    <p class="hint">Envía la misma parrilla local. El envío continúa aunque cierres esta página. El estado público del directo se consulta en YouTube Studio.</p>
+    <form id="youtube-key-form" class="youtube-key-form">
+      <label for="youtube-key">Clave de emisión</label>
+      <div class="actions"><input id="youtube-key" type="password" autocomplete="off" spellcheck="false" maxlength="200" placeholder="Pega aquí la clave de YouTube Studio"><button id="youtube-save" type="submit">Guardar clave</button></div>
+    </form>
+    <p id="youtube-key-state" class="hint"></p>
+    <div class="actions"><button id="youtube-start" type="button" disabled>Enviar señal a YouTube</button><button id="youtube-stop" class="secondary" type="button" disabled>Detener envío</button><a href="https://studio.youtube.com/" target="_blank" rel="noopener noreferrer">Abrir YouTube Studio ↗</a><a href="/youtube-guide.html" target="_blank" rel="noopener noreferrer">Guía de puesta en marcha ↗</a></div>
+    <p id="youtube-message" class="accent" role="status"></p><p id="youtube-error" class="error" role="status"></p><p id="youtube-metrics" class="hint"></p>
+    <details id="youtube-log-details"><summary>Registro de la salida</summary><pre id="youtube-logs" class="hint">Abre este apartado para consultar las últimas incidencias.</pre></details>
+  </section>
+  <section class="panel" aria-labelledby="balance-heading"><h2 id="balance-heading">Balance de fuentes</h2><p id="balance-summary" class="accent" aria-live="polite"></p><p class="hint">Publicadas cuenta noticias distintas incorporadas a la parrilla, incluidas las ya retiradas. Las repeticiones del bucle y los reintentos no aumentan ese contador. Las fuentes sin candidatas utilizables ceden sus turnos a las demás.</p><details><summary>Ver contadores por fuente</summary><div class="table-scroll"><table class="balance-table"><thead><tr><th scope="col">Fuente</th><th scope="col">Publicadas</th><th scope="col">En parrilla</th><th scope="col">Pendientes</th><th scope="col">Reserva</th><th scope="col">Peso</th></tr></thead><tbody id="source-balance"></tbody></table></div></details></section>
+  <section class="panel"><div class="heading"><h2>Parrilla rotativa</h2><span id="playlist-count" class="muted">Consultando parrilla…</span></div><p class="hint">Las piezas terminadas entran según la política de selección. El reparto favorece la diversidad de fuentes y conserva las noticias más recientes de cada una. El vídeo que esté sonando termina antes del cambio. Los archivos de las noticias retiradas se borran automáticamente después.</p><div id="playlist" class="grid"></div></section>
+  <section class="panel"><h2>Producción automática</h2><p class="hint">La cola sigue la política de balanceo configurada y prioriza la actualidad dentro de cada fuente. Los trabajos con redacción o voz iniciadas se continúan para aprovechar el trabajo realizado. Las piezas terminadas permanecen en emisión hasta que haya reemplazos listos.</p><p id="production-summary" class="accent" aria-live="polite"></p><div id="production"></div></section>
+  <section class="panel"><details><summary>Noticias descartadas por fallos</summary><p class="hint">Se permiten tres reintentos después del intento inicial. Si también falla el tercero, la noticia sale de la cola y se conserva aquí su último error.</p><div id="discarded"></div></details></section>
+  <section class="panel"><details><summary>Actividad y configuración</summary><p class="hint">Configuración: <code>/home/marti/docker/news-orchestrator/config/channel.json</code>. Estilo: <code>config/editorial.md</code>. Se releen automáticamente; los cambios de voz y estilo se aplican a los trabajos nuevos.</p><p><a href="/branding.html">Fuentes, colores y logotipos →</a></p><div id="events"></div></details></section>
+  <footer>Emisión local y salida opcional a YouTube · Voz generada con Qwen TTS · Producción automática sin pasos de aprobación.</footer>
+</main><script src="/vendor/hls.light.min.js" defer></script><script src="/app.js" defer></script></body></html>

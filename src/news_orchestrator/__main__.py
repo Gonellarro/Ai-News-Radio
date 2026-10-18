@@ -1,0 +1,163 @@
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import logging
+from pathlib import Path
+import re
+import signal
+import threading
+from urllib.parse import urlsplit
+
+from news_orchestrator import config, visuals, youtube_control
+from news_orchestrator.pipeline import Pipeline
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        path = urlsplit(self.path).path
+        try:
+            if path == "/health":
+                self.json(200, {"status": "ok", "service": "news-orchestrator", "output": "local"})
+            elif path == "/api/status":
+                self.json(200, self.server.pipeline.status())
+            elif path == "/api/youtube":
+                self.json(200, youtube_control.public_status())
+            elif path == "/api/youtube/logs":
+                self.json(200, {"logs": youtube_control.logs()})
+            elif path == "/api/branding":
+                self.json(200, visuals.public_catalog())
+            elif match := re.fullmatch(r"/branding/logos/([a-z0-9-]+\.png)", path):
+                if (visuals.LOGOS / match[1]).is_symlink():
+                    raise ValueError("Logo no válido.")
+                self.file(visuals.LOGOS / match[1], "image/png")
+            elif path in {"/", "/index.html", "/app.js", "/styles.css", "/youtube-guide.html", "/branding.html", "/branding.js", "/vendor/hls.light.min.js"}:
+                name = "index.html" if path == "/" else path[1:]
+                media = "text/javascript" if name.endswith(".js") else "text/css" if name.endswith(".css") else "text/html"
+                self.file(config.WEB / name, media + "; charset=utf-8")
+            elif path == "/live/index.m3u8":
+                self.file(config.DATA / "hls" / "index.m3u8", "application/vnd.apple.mpegurl")
+            elif match := re.fullmatch(r"/live/(segment-\d+\.ts)", path):
+                self.file(config.DATA / "hls" / match[1], "video/mp2t")
+            elif match := re.fullmatch(r"/media/([a-f0-9]{64})/(video\.mp4|audio\.mp3|poster\.png)", path):
+                media = "video/mp4" if match[2].endswith("mp4") else "image/png" if match[2].endswith("png") else "audio/mpeg"
+                self.file(config.DATA / "media" / match[1] / match[2], media)
+            else:
+                self.json(404, {"error": "Ruta no encontrada."})
+        except (ValueError, OSError) as exc:
+            self.json(503, {"error": str(exc)})
+
+    def do_POST(self):
+        origin = self.headers.get("Origin")
+        if origin and urlsplit(origin).netloc != self.headers.get("Host"):
+            self.json(403, {"error": "Origen no permitido."})
+            return
+        if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+            self.json(415, {"error": "Se requiere JSON."})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if self.headers.get("Transfer-Encoding") or not 1 <= length <= 4096:
+                raise ValueError("Cuerpo de petición no válido.")
+            value = json.loads(self.rfile.read(length))
+            if not isinstance(value, dict):
+                raise ValueError("Se requiere un objeto JSON.")
+            path = urlsplit(self.path).path
+            if path == "/api/scan":
+                self.server.pipeline.requested.set()
+                self.json(202, {"status": "scheduled"})
+            elif path == "/api/youtube/key":
+                self.json(200, youtube_control.update_key(value.get("key")))
+            elif path == "/api/youtube/start":
+                self.json(202, youtube_control.start())
+            elif path == "/api/youtube/stop":
+                self.json(202, youtube_control.stop())
+            else:
+                self.json(404, {"error": "Ruta no encontrada."})
+        except (ValueError, UnicodeError) as exc:
+            self.json(400, {"error": str(exc)})
+        except OSError:
+            self.json(503, {"error": "No se pudo guardar el control de la salida a YouTube."})
+
+    def json(self, status, value):
+        data = json.dumps(value, ensure_ascii=False).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def file(self, path, media):
+        if not path.is_file():
+            self.json(404, {"error": "El recurso todavía no está disponible."})
+            return
+        size = path.stat().st_size
+        start, end = 0, size - 1
+        partial = False
+        requested = self.headers.get("Range")
+        if requested and (media.startswith("video/") or media.startswith("audio/")):
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", requested)
+            if not match or not any(match.groups()):
+                self.send_error(416)
+                return
+            if match[1]:
+                start = int(match[1])
+                if match[2]:
+                    end = min(end, int(match[2]))
+            else:
+                start = max(0, size - int(match[2]))
+            if start > end or start >= size:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            partial = True
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type", media)
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Accept-Ranges", "bytes")
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        try:
+            with path.open("rb") as source:
+                source.seek(start)
+                remaining = end - start + 1
+                while remaining:
+                    chunk = source.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def log_message(self, fmt, *args):
+        if "/live/" not in (args[0] if args else "") and "/api/status" not in (args[0] if args else ""):
+            logging.info("%s - %s", self.address_string(), fmt % args)
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    pipeline = Pipeline()
+    server = ThreadingHTTPServer(("0.0.0.0", 8792), Handler)
+    server.pipeline = pipeline
+    def shutdown(*_):
+        pipeline.stop.set()
+        threading.Thread(target=server.shutdown, daemon=True).start()
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+    pipeline.start()
+    logging.info("Orquestador automático listo en el puerto 8792; salida local.")
+    try:
+        server.serve_forever()
+    finally:
+        pipeline.close()
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

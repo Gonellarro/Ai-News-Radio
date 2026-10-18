@@ -1,0 +1,29 @@
+{
+  "enabled": true,
+  "channel_name": "Noticias de inteligencia artificial",
+  "topic": "Inteligencia artificial",
+  "query": "",
+  "platform": "all",
+  "source_ids": [],
+  "language": "all",
+  "scan_interval_seconds": 3600,
+  "max_age_hours": 168,
+  "max_playlist": 20,
+  "max_pending": 10,
+  "balancing": {
+    "strategy": "fair",
+    "weights": {}
+  },
+  "voice_name": "cristina",
+  "voice_mode": "random",
+  "voice_names": [],
+  "voice_exclude": ["qwen-demo-en"],
+  "tts_language": "Spanish",
+  "audio_intro_seconds": 1.0,
+  "audio_outro_seconds": 2.0,
+  "intro_music_enabled": true,
+  "voice_normalization_enabled": true,
+  "voice_loudness_lufs": -16.0,
+  "voice_true_peak_dbtp": -2.0,
+  "voice_loudness_range_lu": 7.0
+}
