@@ -12,6 +12,22 @@
     </section>
     <section class="panel"><h2>Automatización</h2><p id="automatic-state" class="accent">Activa · Sin intervención humana</p><dl id="settings"></dl><button id="scan" type="button">Revisar noticias ahora</button><p id="scan-message" class="hint">La revisión programada es horaria. Se respetan los intervalos y las pausas de cada fuente.</p><p id="scan-summary" class="hint" aria-live="polite"></p><details><summary>Fuentes con incidencias</summary><div id="source-warnings" class="hint"></div></details><p id="service-errors" class="error" role="status"></p></section>
   </div>
+  <section class="panel" aria-labelledby="narration-heading">
+    <h2 id="narration-heading">Configurador de locución</h2>
+    <form id="narration-form" class="narration-form">
+      <label for="tts-engine">Motor de voz<select id="tts-engine" name="tts_engine"><option value="piper">Piper</option><option value="qwen">Qwen TTS</option></select></label>
+      <label id="piper-voice-label" for="piper-voice">Voz de Piper<select id="piper-voice" name="piper_voice"><option value="es_ES-davefx-medium">Davefx · Español (España)</option></select></label>
+      <label id="qwen-mode-label" for="qwen-mode" hidden>Selección de voces Qwen<select id="qwen-mode"><option value="random">Al azar entre las voces activas</option><option value="fixed">Una voz fija</option></select></label>
+      <label id="qwen-voice-label" for="qwen-voice" hidden>Voz fija de Qwen<select id="qwen-voice"><option value="">Selecciona una voz activa</option></select></label>
+      <button id="narration-save" type="submit">Guardar motor y voz</button>
+    </form>
+    <p id="narration-description" class="hint"></p>
+    <p class="hint">Los trabajos iniciados conservan su motor y los audios terminados mantienen su voz. Si eliminas o desactivas la voz fija de Qwen, las nuevas locuciones usarán otra voz activa disponible.</p>
+    <div class="links"><a id="voice-library-link" href="#" target="_blank" rel="noopener">Gestionar voces clonadas de Qwen ↗</a><button id="qwen-voices-refresh" type="button" class="secondary">Actualizar biblioteca</button></div>
+    <p id="qwen-voices-status" class="hint" role="status"></p>
+    <p id="narration-message" class="accent" role="status"></p>
+    <details><summary>Escuchar una muestra de Davefx</summary><audio controls preload="none" src="/samples/piper-davefx.mp3"></audio></details>
+  </section>
   <section class="panel" aria-labelledby="youtube-heading">
     <div class="heading"><h2 id="youtube-heading">Salida a YouTube</h2><span id="youtube-state" class="muted" aria-live="polite">Conectando con el servicio…</span></div>
     <p class="hint">Envía la misma parrilla local. El envío continúa aunque cierres esta página. El estado público del directo se consulta en YouTube Studio.</p>
@@ -26,8 +42,8 @@
   </section>
   <section class="panel" aria-labelledby="balance-heading"><h2 id="balance-heading">Balance de fuentes</h2><p id="balance-summary" class="accent" aria-live="polite"></p><p class="hint">Publicadas cuenta noticias distintas incorporadas a la parrilla, incluidas las ya retiradas. Las repeticiones del bucle y los reintentos no aumentan ese contador. Las fuentes sin candidatas utilizables ceden sus turnos a las demás.</p><details><summary>Ver contadores por fuente</summary><div class="table-scroll"><table class="balance-table"><thead><tr><th scope="col">Fuente</th><th scope="col">Publicadas</th><th scope="col">En parrilla</th><th scope="col">Pendientes</th><th scope="col">Reserva</th><th scope="col">Peso</th></tr></thead><tbody id="source-balance"></tbody></table></div></details></section>
   <section class="panel"><div class="heading"><h2>Parrilla rotativa</h2><span id="playlist-count" class="muted">Consultando parrilla…</span></div><p class="hint">Las piezas terminadas entran según la política de selección. El reparto favorece la diversidad de fuentes y conserva las noticias más recientes de cada una. El vídeo que esté sonando termina antes del cambio. Los archivos de las noticias retiradas se borran automáticamente después.</p><div id="playlist" class="grid"></div></section>
-  <section class="panel"><h2>Producción automática</h2><p class="hint">La cola sigue la política de balanceo configurada y prioriza la actualidad dentro de cada fuente. Los trabajos con redacción o voz iniciadas se continúan para aprovechar el trabajo realizado. Las piezas terminadas permanecen en emisión hasta que haya reemplazos listos.</p><p id="production-summary" class="accent" aria-live="polite"></p><div id="production"></div></section>
+  <section class="panel"><h2>Producción automática</h2><p class="hint">La cola sigue la política de balanceo configurada y prioriza la actualidad dentro de cada fuente. Los trabajos con redacción o voz iniciadas se continúan para aprovechar el trabajo realizado. Las piezas terminadas permanecen en emisión hasta que haya reemplazos listos.</p><p id="production-summary" class="accent" aria-live="polite"></p><p id="rotation-status" class="hint" role="status"></p><div id="production"></div></section>
   <section class="panel"><details><summary>Noticias descartadas por fallos</summary><p class="hint">Se permiten tres reintentos después del intento inicial. Si también falla el tercero, la noticia sale de la cola y se conserva aquí su último error.</p><div id="discarded"></div></details></section>
   <section class="panel"><details><summary>Actividad y configuración</summary><p class="hint">Configuración: <code>/home/marti/docker/news-orchestrator/config/channel.json</code>. Estilo: <code>config/editorial.md</code>. Se releen automáticamente; los cambios de voz y estilo se aplican a los trabajos nuevos.</p><p><a href="/branding.html">Fuentes, colores y logotipos →</a></p><div id="events"></div></details></section>
-  <footer>Emisión local y salida opcional a YouTube · Voz generada con Qwen TTS · Producción automática sin pasos de aprobación.</footer>
+  <footer>Emisión local y salida opcional a YouTube · Locución con Piper o Qwen TTS · Producción automática sin pasos de aprobación.</footer>
 </main><script src="/vendor/hls.light.min.js" defer></script><script src="/app.js" defer></script></body></html>

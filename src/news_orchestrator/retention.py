@@ -5,11 +5,14 @@ import re
 import shutil
 
 from news_orchestrator import config, lifetime
+from news_orchestrator.client import RemoteError
 from news_orchestrator.store import now
 
 
 def cleanup(store, tts, media_lock, stop):
     removed, purged = 0, 0
+    pending_remote = 0
+    piper_mode = config.load()["tts_engine"] == "piper"
     remote = []
     for candidate in store.retired_artifacts():
         if stop.is_set():
@@ -51,7 +54,10 @@ def cleanup(store, tts, media_lock, stop):
         if work.get("voice_id") or work.get("tts_id") or work.get("tts_generation"):
             try:
                 result = tts.request("/api/jobs/purge-news", {"story_id": job_id}, timeout=15)
-            except Exception:
+            except (OSError, RemoteError) as exc:
+                if piper_mode and (not isinstance(exc, RemoteError) or exc.status >= 500):
+                    pending_remote += 1
+                    continue  # Local cleanup and Piper do not need Qwen online.
                 if removed or purged:
                     store.event(f"Limpieza local completada: {removed} carpetas retiradas; pendiente de recuperar la conexión con Qwen para terminar su limpieza.")
                 raise
@@ -61,9 +67,11 @@ def cleanup(store, tts, media_lock, stop):
                 continue  # An old remote attempt may still be finishing.
         store.tts_deleted(job_id)
     store.set_state("last_cleanup_at", now())
+    store.set_state("qwen_cleanup_pending", pending_remote)
     if removed or purged:
         store.event(f"Limpieza automática: {removed} carpetas de noticias retiradas y {purged} trabajos de audio de Qwen eliminados. Se conserva el historial.")
-    return {"removed_folders": removed, "purged_tts_jobs": purged, "pending_tts_jobs": pending}
+    return {"removed_folders": removed, "purged_tts_jobs": purged, "pending_tts_jobs": pending,
+            "pending_qwen_jobs": pending_remote}
 
 
 def run(store, tts, media_lock, stop):

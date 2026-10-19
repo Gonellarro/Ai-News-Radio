@@ -2,7 +2,7 @@ x-runtime: &runtime
   image: news-orchestrator:0.1.0
   init: true
   user: "1000:1000"
-  environment:
+  environment: &runtime-environment
     DATA_DIR: /app/data
     CONFIG_DIR: /app/config
     WEB_DIR: /app/web
@@ -23,7 +23,16 @@ services:
     <<: *runtime
     build: .
     cpus: 1.0
-    mem_limit: 384m
+    mem_limit: 512m
+    environment:
+      <<: *runtime-environment
+      AI_RUNTIME_LOCK: /run/local-ai/inference.lock
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ../.ai-runtime:/run/local-ai
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8792/health', timeout=3)"]
       interval: 30s

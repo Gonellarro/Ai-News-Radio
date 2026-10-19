@@ -1,14 +1,16 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import signal
 import threading
 from urllib.parse import urlsplit
 
-from news_orchestrator import config, visuals, youtube_control
+from news_orchestrator import config, piper_assets, visuals, youtube_control
 from news_orchestrator.pipeline import Pipeline
+from news_orchestrator.client import RemoteError
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -25,6 +27,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.json(200, {"logs": youtube_control.logs()})
             elif path == "/api/branding":
                 self.json(200, visuals.public_catalog())
+            elif path == "/api/narration":
+                settings = config.load()
+                self.json(200, {"tts_engine": settings["tts_engine"], "piper_voice": settings["piper_voice"],
+                                "voice_mode": settings["voice_mode"], "qwen_voice_id": settings["qwen_voice_id"],
+                                "voice_name": settings["voice_name"],
+                                "qwen_web_url": os.environ.get("QWENTTS_PUBLIC_URL", self.server.pipeline.tts.url),
+                                "piper_voices": piper_assets.public_catalogue()})
+            elif path == "/api/voices":
+                settings = config.load()
+                data = self.server.pipeline.tts.request("/api/voices", timeout=5)
+                self.json(200, {**data, "voice_names": settings["voice_names"], "voice_exclude": settings["voice_exclude"]})
+            elif path == "/samples/piper-davefx.mp3":
+                self.file(config.DATA / "previews" / "piper-davefx.mp3", "audio/mpeg")
             elif match := re.fullmatch(r"/branding/logos/([a-z0-9-]+\.png)", path):
                 if (visuals.LOGOS / match[1]).is_symlink():
                     raise ValueError("Logo no válido.")
@@ -42,7 +57,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.file(config.DATA / "media" / match[1] / match[2], media)
             else:
                 self.json(404, {"error": "Ruta no encontrada."})
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, RemoteError) as exc:
             self.json(503, {"error": str(exc)})
 
     def do_POST(self):
@@ -64,6 +79,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/scan":
                 self.server.pipeline.requested.set()
                 self.json(202, {"status": "scheduled"})
+            elif path == "/api/narration":
+                if value.get("tts_engine") == "qwen" and value.get("voice_mode") == "fixed":
+                    voices = self.server.pipeline.tts.request("/api/voices", timeout=5)["voices"]
+                    if not any(v["id"] == value.get("qwen_voice_id") and v.get("enabled", True) for v in voices):
+                        raise ValueError("Selecciona una voz activa de Qwen. Actualiza la biblioteca si acabas de modificarla.")
+                settings = config.save_narration(value)
+                self.server.pipeline.store.event(f"Motor de locución configurado: {settings['tts_engine']}.")
+                self.json(200, settings)
             elif path == "/api/youtube/key":
                 self.json(200, youtube_control.update_key(value.get("key")))
             elif path == "/api/youtube/start":
@@ -75,7 +98,9 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeError) as exc:
             self.json(400, {"error": str(exc)})
         except OSError:
-            self.json(503, {"error": "No se pudo guardar el control de la salida a YouTube."})
+            self.json(503, {"error": "No se pudo guardar la configuración. Comprueba los permisos de la carpeta correspondiente."})
+        except RemoteError as exc:
+            self.json(503, {"error": str(exc)})
 
     def json(self, status, value):
         data = json.dumps(value, ensure_ascii=False).encode()

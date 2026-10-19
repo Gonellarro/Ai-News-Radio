@@ -1,6 +1,6 @@
 # Orquestador automático de noticias
 
-Proyecto independiente que coordina News Radio, Ollama y Qwen TTS para producir
+Proyecto independiente que coordina News Radio, Ollama y Piper o Qwen TTS para producir
 noticias en español, convertirlas en audio y vídeo y mantener una emisión local,
 con salida opcional a YouTube mediante RTMPS.
 
@@ -26,7 +26,9 @@ desactivada hasta guardar una clave y solicitar el envío desde el panel.
    conserva como metadato. No descarga hilos de comentarios de Reddit.
 5. Solicita una redacción en español a Ollama con las instrucciones del canal,
    directamente como texto de locución. No necesita que el borrador esté revisado.
-6. Elige una voz al azar de la biblioteca configurada para cada noticia, evitando
+6. Genera la locución con el motor elegido en **Configurador de locución**. Piper
+   utiliza una voz fija, inicialmente Davefx en español. En Qwen elige una voz al
+   azar de la biblioteca configurada para cada noticia, evitando
    repetir inmediatamente la anterior cuando hay alternativas. Guarda la elección
    antes de enviarla a Qwen y la conserva durante sus fragmentos y reintentos.
    Ollama y Qwen
@@ -47,11 +49,12 @@ desactivada hasta guardar una clave y solicitar el envío desde el panel.
 
 ```text
 news-radio:8790       Fuentes y redacción local con Ollama
-qwentts:8791          Clonación de voz y audio
+qwentts:8791          Clonación de voz y audio, opcional en modo Piper
 news-orchestrator:8792
   orchestrator       Descubrimiento horario, producción y panel web
   broadcaster        Reloj de emisión y publicación de segmentos HLS
   youtube            Salida independiente HLS → RTMPS, opcional
+  piper_worker       Proceso temporal de voz Piper; termina tras cada locución
 ```
 
 La producción de noticias es secuencial. El descubrimiento horario se ejecuta en
@@ -81,6 +84,23 @@ añade una marca de fin de emisión. El segmento ya servido se conserva mediante
 enlace físico mientras forme parte del búfer, aunque cambie la parrilla.
 
 ## Abrir la emisión
+
+Para arrancar el conjunto en orden, desde cualquier carpeta:
+
+```bash
+/home/marti/docker/news-orchestrator/start.sh
+```
+
+El script comprueba Docker, la configuración, Ollama y el modelo editorial;
+arranca News Radio, la API ligera de Qwen para gestionar su biblioteca, y finalmente el orquestador
+con sus emisores. Espera a que los contenedores estén disponibles y puede solicitar
+`sudo` si necesita iniciar el servicio local de Ollama. No descarga modelos.
+Con `--build` reconstruye las imágenes; `--help` muestra las opciones.
+El arranque reanuda la producción si `enabled` es `true`. La salida a YouTube
+conserva el estado configurado. Si hay un error, se informa de la etapa y los
+servicios ya iniciados permanecen disponibles para consultar el problema.
+
+Para arrancar únicamente este proyecto manualmente:
 
 ```bash
 cd /home/marti/docker/news-orchestrator
@@ -120,11 +140,17 @@ En el apartado **Salida a YouTube** del panel:
    la producción de noticias ni la emisión local.
 
 El destino es `rtmps://a.rtmps.youtube.com:443/live2`. Se comprueba el certificado
-TLS. El contenedor `youtube` copia H.264/AAC desde el HLS local, sin volver a
-codificar. FFmpeg corrige los saltos de tiempos entre piezas y convierte el
-encapsulado a FLV/RTMPS. Un vigilante supervisa el progreso, reconecta con esperas
-de 5, 10, 20, 40 y hasta 60 segundos, y relanza la salida si no avanza durante
-45 segundos. Los intentos continúan mientras el envío esté solicitado.
+TLS. El contenedor `youtube` copia el vídeo H.264 y reconstruye únicamente el
+audio como AAC estéreo a 48 kHz, con reloj continuo entre noticias. Rellena huecos
+y recorta solapamientos sin estirar la voz. El contenedor conserva el límite de
+media CPU y 192 MiB; no carga modelos ni recodifica vídeo.
+
+Un vigilante reconecta con esperas de 5, 10, 20, 40 y hasta 60 segundos. Detecta
+bloqueos de 45 segundos, falta de envío de bytes, retrocesos del reloj y una
+ralentización sostenida, aunque FFmpeg todavía indique progreso. Los intentos
+continúan mientras el envío esté solicitado. El panel muestra ritmo y retraso
+del transporte; los nuevos registros incluyen hora de Madrid y su desplazamiento
+UTC explícito. Véase [YOUTUBE_CONTINUITY.md](docs/YOUTUBE_CONTINUITY.md).
 
 La intención de emitir persiste tras reiniciar Docker. El proceso tiene un bloqueo
 para evitar dos emisores simultáneos. La clave y el control se guardan en
@@ -140,11 +166,10 @@ evento se gestionan en Studio. El módulo no crea ni termina eventos por API. Pa
 recuperar un mismo evento tras un corte conviene revisar su opción de finalización
 automática. Si YouTube ya lo ha terminado, puede ser necesario crear o iniciar otro.
 
-La emisión reenvía el bitrate variable de los vídeos preparados. Todavía requiere
-una prueba real con la clave del canal, escuchando transiciones y comprobando la
-recepción en Studio mientras Qwen trabaja. Si Studio avisa de bitrate insuficiente,
-habrá que ajustar el perfil de codificación de los vídeos antes de mantener el
-directo en producción. No hay recodificación automática oculta en este módulo.
+La emisión reenvía el bitrate variable del vídeo preparado. Si Studio avisa de
+bitrate insuficiente, habrá que ajustar el perfil de codificación de los vídeos.
+Las verificaciones locales de tiempos no sustituyen escuchar el canal público ni
+consultar su estado en Studio mientras Qwen trabaja.
 
 Referencias: [crear canal](https://support.google.com/youtube/answer/1646861?hl=es),
 [directo con codificador](https://support.google.com/youtube/answer/2907883?hl=es),
@@ -152,6 +177,9 @@ Referencias: [crear canal](https://support.google.com/youtube/answer/1646861?hl=
 [corrección de tiempos de FFmpeg](https://ffmpeg.org/ffmpeg.html#Advanced-options).
 
 ### `config/channel.json`
+
+La web permite guardar motor y voz en **Configurador de locución**. La integración,
+descarga de modelos y funcionamiento se describen en [PIPER.md](docs/PIPER.md).
 
 - `enabled`: activa o pausa nuevos ciclos y trabajos; la parrilla sigue emitiendo.
 - `channel_name` y `topic`: nombre y descripción del canal.
@@ -163,6 +191,11 @@ Referencias: [crear canal](https://support.google.com/youtube/answer/1646861?hl=
   Vacío utiliza todas las fuentes de la plataforma seleccionada.
 - `language`: `all`, `es` o `en`; idioma de las fuentes, no de la locución.
 - `scan_interval_seconds`: 3600 por defecto, como mínimo una hora.
+- `new_stories_per_hour`: objetivo y máximo de incorporaciones a parrilla en una
+  ventana móvil de 60 minutos, actualmente **5**. Reparte el inicio de nuevas
+  producciones aproximadamente cada 12 minutos. Solo cuentan incorporaciones
+  reales; fallos, candidatas omitidas y repeticiones de emisión no gastan cupo.
+  Se relee sin reiniciar. Véase [ROTATION.md](docs/ROTATION.md).
 - `max_age_hours`: antigüedad máxima de candidatas, actualmente 168 horas. Se
   prioriza lo más reciente de cada fuente dentro de esa ventana.
 - `balancing`: política modular de reparto. `strategy: "fair"` equilibra las
@@ -181,8 +214,13 @@ Referencias: [crear canal](https://support.google.com/youtube/answer/1646861?hl=
   `max_playlist`, las piezas adicionales se generan progresivamente con las noticias
   elegibles disponibles. Al reducirlo, se retiran las sobrantes respetando el vídeo
   que está sonando y la limpieza automática de archivos.
-- `voice_mode`: `random` (activo) o `fixed`.
+- `tts_engine`: `piper` o `qwen`. Solo se usa un motor por trabajo.
+- `piper_voice`: identificador del catálogo `config/piper_voices.json`, inicialmente
+  `es_ES-davefx-medium`. Piper usa esta voz fija; no aplica el sorteo de Qwen.
+- `voice_mode`: selección de voz de Qwen: `random` o `fixed`.
 - `voice_name`: nombre de la voz en modo fijo, inicialmente `cristina`.
+- `qwen_voice_id`: identificador estable de la voz fija, seleccionado desde la web.
+  Tiene prioridad sobre `voice_name`, de modo que renombrarla no rompe la selección.
 - `voice_names`: lista de nombres elegibles para el modo aleatorio. Vacía permite
   todas las voces importadas salvo las excluidas; las voces nuevas entran automáticamente.
 - `voice_exclude`: nombres excluidos del sorteo; inicialmente `["qwen-demo-en"]`.
@@ -370,7 +408,8 @@ MP4 H.264, 1280×720, 25 imágenes por segundo, GOP de dos segundos, audio AAC d
 48 kHz estéreo a 128 kbit/s. La preparación de vídeo utiliza un hilo de FFmpeg.
 La emisión HLS copia segmentos comprimidos preparados y necesita pocos recursos.
 
-Límites de contenedor iniciales: productor 1 CPU y 384 MiB; emisor 0,5 CPU y
+Límites de contenedor: productor 1 CPU y 512 MiB, incluido el proceso temporal de
+Piper; emisor 0,5 CPU y
 192 MiB. Qwen mantiene sus límites y se alterna con Ollama mediante el bloqueo ya
 instalado. La capacidad sostenida depende del tiempo real de síntesis: revisar cada
 hora no significa poder fabricar diez locuciones completas dentro de esa hora.
@@ -384,11 +423,16 @@ consulta del orquestador, respetando los presupuestos de lectura del recolector.
 ```text
 config/channel.json        Selección, frecuencia, voz y límites
 config/editorial.md        Instrucciones del canal automático
+config/piper_voices.json   Voces de Piper y descargas con revisión y SHA-256 fijos
 src/news_orchestrator/
   pipeline.py              Descubrimiento y producción
+  narration.py             Adaptadores Qwen/Piper y recuperación del WAV original
+  piper_worker.py          Síntesis Piper en un proceso temporal de un hilo
+  piper_assets.py          Catálogo y descarga explícita de voces verificadas
   client.py                Clientes HTTP de los dos servicios
   store.py                 Historial, cola, reintentos y parrilla SQLite
   balancing.py             Políticas sustituibles de reparto entre fuentes
+  rotation.py              Cupo horario persistente y cadencia de producción
   media.py                 Tarjetas, MP4 y segmentación
   visuals.py               Identidades locales y elección reproducible del diseño
   cards.py                 PNG, tipografía adaptable y contraste de textos
@@ -399,6 +443,8 @@ src/news_orchestrator/
   retention.py             Limpieza automática de noticias fuera de la parrilla
   broadcast.py             Emisión local independiente
   youtube.py               Salida RTMPS y reconexión independiente
+  youtube_media.py         Vídeo copiado y audio con reloj continuo
+  youtube_health.py        Detección de bloqueos, retraso y ralentización
   youtube_control.py       Clave privada, órdenes y estado público
   __main__.py              API y web
 web/                       Panel y reproductor HLS local

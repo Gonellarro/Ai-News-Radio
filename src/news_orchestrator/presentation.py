@@ -37,7 +37,7 @@ def current(directory, settings, intro=None, visual=None):
 
 
 def prepare(directory, article, title, channel, settings, stop, download_source, intro=None, visual=None):
-    """Always start from the original Qwen WAV, never a processed MP3/video.
+    """Start audio changes from the original narration WAV of either backend.
 
     Existing segment names remain intact. The broadcaster can finish its saved
     list; its next read of clip.m3u8 sees the fully prepared replacement version.

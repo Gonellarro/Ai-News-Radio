@@ -11,8 +11,10 @@ import signal
 import subprocess
 import threading
 import time
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from news_orchestrator import config, youtube_control as control
+from news_orchestrator import config, youtube_control as control, youtube_media
+from news_orchestrator.youtube_health import ProgressClock
 
 SOURCE = "http://127.0.0.1:8792/live/index.m3u8"
 
@@ -22,19 +24,16 @@ def now():
 
 
 def command(key):
-    # Do not preserve the per-clip timestamps: FFmpeg corrects HLS discontinuities
-    # before remuxing. Copy compressed packets, without video/audio inference or encoding.
-    return ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning", "-nostats",
-            "-stats_period", "1", "-progress", "pipe:1", "-threads", "1",
-            "-fflags", "+genpts+discardcorrupt", "-dts_delta_threshold", "1",
-            "-rw_timeout", "15000000", "-reconnect", "1", "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "5", "-live_start_index", "-3", "-seg_max_retry", "2",
-            "-re", "-i", SOURCE, "-map", "0:v:0", "-map", "0:a:0", "-sn", "-dn",
-            "-c:v", "copy", "-c:a", "copy", "-bsf:a", "aac_adtstoasc",
-            "-avoid_negative_ts", "make_zero", "-max_muxing_queue_size", "256",
-            "-rw_timeout", "15000000", "-tls_verify", "1", "-verifyhost", "a.rtmps.youtube.com",
-            "-ca_file", "/etc/ssl/certs/ca-certificates.crt", "-f", "flv", "-flvflags", "no_duration_filesize",
-            control.SERVER + "/" + key]
+    return youtube_media.command(SOURCE, control.SERVER + "/" + key)
+
+
+class LocalTimeFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        try:
+            zone = ZoneInfo("Europe/Madrid")
+        except ZoneInfoNotFoundError:
+            zone = timezone.utc
+        return datetime.fromtimestamp(record.created, zone).isoformat(timespec="milliseconds")
 
 
 class Relay:
@@ -56,16 +55,15 @@ class Relay:
         self.retry_tick = 0
         self.retry_at = ""
         self.started_at = ""
-        self.spawn_tick = 0
-        self.progress_tick = 0
+        self.clock = ProgressClock()
+        self.input_discontinuities = 0
         self.last_progress_at = ""
-        self.last_time = -1
         self.last_error = ""
         self.logger = logging.getLogger("youtube-relay")
         self.logger.propagate = False
         self.logger.setLevel(logging.INFO)
         handler = RotatingFileHandler(directory / "relay.log", maxBytes=1024 * 1024, backupCount=2)
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        handler.setFormatter(LocalTimeFormatter("%(asctime)s %(levelname)s %(message)s"))
         self.logger.addHandler(handler)
 
     def heartbeat(self, state, error=""):
@@ -75,7 +73,9 @@ class Relay:
                  "error": control.redact(error, self.key)[:1500], "started_at": self.started_at,
                  "last_progress_at": self.last_progress_at, "retry_at": self.retry_at,
                  "reconnects": self.reconnects, "sent_bytes": progress.get("total_size"),
-                 "video_seconds": progress.get("out_time_us", 0) / 1000000}
+                 "video_seconds": progress.get("out_time_us", 0) / 1000000,
+                 "audio_mode": "continuous_aac", "input_discontinuities": self.input_discontinuities,
+                 **self.clock.metrics()}
         config.atomic_json(control.DIRECTORY / "status.json", value)
 
     def read_progress(self, process):
@@ -99,6 +99,13 @@ class Relay:
             line = control.redact(raw.strip(), self.key)[:1500]
             if not line:
                 continue
+            if "timestamp discontinuity (stream id=" in line:
+                # Independent HLS clips announce a new input clock. FFmpeg
+                # applies its offset; the output audio has its own sample clock.
+                with self.lock:
+                    self.input_discontinuities += 1
+                self.logger.debug("Salto de entrada HLS normalizado: %s", line)
+                continue
             with self.lock:
                 self.errors.append(line)
                 if "non-monoton" in line.casefold():
@@ -111,10 +118,10 @@ class Relay:
             self.progress = {}
             self.errors.clear()
             self.timestamp_warnings.clear()
-        self.last_time = -1
+        self.clock = ProgressClock()
+        self.input_discontinuities = 0
         self.started_at = now()
         self.last_progress_at = ""
-        self.spawn_tick = self.progress_tick = time.monotonic()
         self.process = subprocess.Popen(command(self.key), stdin=subprocess.DEVNULL,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                         text=True, bufsize=1, start_new_session=True)
@@ -123,9 +130,11 @@ class Relay:
             thread = threading.Thread(target=target, args=(self.process,), daemon=True)
             thread.start()
             self.readers.append(thread)
-        self.logger.info("Iniciada salida RTMPS; vídeo y audio se copian sin recodificar.")
+        self.logger.info("Iniciada salida RTMPS; vídeo sin recodificar y audio AAC con reloj continuo a 48 kHz.")
 
-    def terminate(self):
+    def terminate(self, reason=""):
+        if self.process and reason:
+            self.logger.info("%s", reason)
         if self.process and self.process.poll() is None:
             try:
                 os.killpg(self.process.pid, signal.SIGTERM)
@@ -167,7 +176,7 @@ class Relay:
     def tick(self):
         settings = control.load()
         if settings["revision"] != self.revision:
-            self.terminate()
+            self.terminate("Reconfiguración de la salida solicitada desde el panel.")
             self.revision = settings["revision"]
             self.failures = 0
             self.retry_tick = 0
@@ -178,7 +187,7 @@ class Relay:
             with self.lock:
                 self.progress = {}
         if not settings["enabled"]:
-            self.terminate()
+            self.terminate("Salida detenida desde el panel; la emisión local continúa.")
             self.heartbeat("stopped")
             return
         if not settings["stream_key"]:
@@ -186,7 +195,7 @@ class Relay:
             self.heartbeat("waiting", "Guarda una clave de emisión para enviar la señal a YouTube.")
             return
         if not self.source_ready():
-            self.terminate()
+            self.terminate("Salida en espera: la emisión local todavía no está disponible.")
             self.heartbeat("waiting", "Esperando a que se recupere la emisión local.")
             return
         if not self.process:
@@ -202,21 +211,21 @@ class Relay:
             return
         with self.lock:
             position = self.progress.get("out_time_us", -1)
+            sent_bytes = self.progress.get("total_size")
             warnings = list(self.timestamp_warnings)
-        if position > self.last_time:
-            self.last_time = position
-            self.progress_tick = time.monotonic()
+        if self.clock.observe(position, sent_bytes):
             if position > 0:
                 self.last_progress_at = now()
                 self.last_error = ""
                 self.retry_at = ""
             if position > 60000000:
                 self.failures = 0
+        problem = self.clock.problem()
         if len([stamp for stamp in warnings if time.monotonic() - stamp < 30]) >= 10:
             self.fail("Se detectaron tiempos de vídeo discontinuos; reconectando la salida a YouTube.")
             self.heartbeat("retrying", self.last_error)
-        elif time.monotonic() - self.progress_tick > 45:
-            self.fail("La salida no ha avanzado durante 45 segundos; reconectando con YouTube.")
+        elif problem:
+            self.fail(problem)
             self.heartbeat("retrying", self.last_error)
         else:
             self.heartbeat("sending" if self.last_progress_at else "connecting")
@@ -232,7 +241,7 @@ class Relay:
                     self.heartbeat("retrying", self.last_error)
                 self.stop.wait(1)
         finally:
-            self.terminate()
+            self.terminate("Servicio de salida detenido; se conserva la configuración para el siguiente arranque.")
             self.heartbeat("shutdown")
             self.owner.close()
 

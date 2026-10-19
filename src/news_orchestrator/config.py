@@ -2,22 +2,43 @@ import json
 import math
 import os
 from pathlib import Path
+import threading
 
 from news_orchestrator import balancing
 
 DATA = Path(os.environ.get("DATA_DIR", "/app/data"))
 CONFIG = Path(os.environ.get("CONFIG_DIR", "/app/config"))
 WEB = Path(os.environ.get("WEB_DIR", "/app/web"))
+WRITE_LOCK = threading.Lock()
 
 
 def load():
     value = json.loads((CONFIG / "channel.json").read_text())
+    return validate(value)
+
+
+def validate(value):
     if not isinstance(value, dict) or not isinstance(value.get("enabled"), bool):
         raise ValueError("channel.json debe contener enabled: true o false.")
     for key in ["channel_name", "topic", "voice_name", "tts_language"]:
         if not isinstance(value.get(key), str) or not value[key].strip() or len(value[key]) > 200:
             raise ValueError(f"{key} debe ser un texto de entre 1 y 200 caracteres.")
     value.setdefault("voice_mode", "fixed")
+    value.setdefault("new_stories_per_hour", 5)
+    value.setdefault("qwen_voice_id", "")
+    voice_id = value["qwen_voice_id"]
+    if not isinstance(voice_id, str) or (voice_id and (len(voice_id) != 32 or any(c not in "0123456789abcdef" for c in voice_id))):
+        raise ValueError("qwen_voice_id debe ser el identificador de una voz de Qwen o un texto vacío.")
+    value.setdefault("tts_engine", "qwen")
+    value.setdefault("piper_voice", "es_ES-davefx-medium")
+    if not isinstance(value["tts_engine"], str) or value["tts_engine"] not in {"qwen", "piper"}:
+        raise ValueError("tts_engine debe ser qwen o piper.")
+    if not isinstance(value["piper_voice"], str):
+        raise ValueError("piper_voice debe ser un identificador de voz.")
+    from news_orchestrator.piper_assets import voice
+    selected = voice(value["piper_voice"])
+    if value["tts_engine"] == "piper" and selected["language"] != value["tts_language"]:
+        raise ValueError("El idioma de la voz Piper debe coincidir con tts_language.")
     value["balancing"] = balancing.validate(value.get("balancing", {"strategy": "fair", "weights": {}}))
     value.setdefault("voice_names", [])
     value.setdefault("voice_exclude", ["qwen-demo-en"])
@@ -47,7 +68,7 @@ def load():
     # Older configurations used a days-long archive. Retirement now removes
     # generated files automatically once playback no longer needs them.
     value.pop("artifact_retention_days", None)
-    for key in ("max_playlist", "max_pending"):
+    for key in ("max_playlist", "max_pending", "new_stories_per_hour"):
         if type(value.get(key)) is not int or value[key] < 1:
             raise ValueError(f"{key} debe ser un entero positivo.")
     for key, low, high in [("scan_interval_seconds", 3600, 86400), ("max_age_hours", 1, 168)]:
@@ -64,6 +85,22 @@ def load():
     if not isinstance(value.get("source_ids"), list) or any(not isinstance(s, str) for s in value["source_ids"]):
         raise ValueError("source_ids debe ser una lista de identificadores de fuente.")
     return value
+
+
+def save_narration(payload):
+    required = {"tts_engine", "piper_voice"}
+    if not required <= set(payload) or set(payload) - required - {"voice_mode", "qwen_voice_id"}:
+        raise ValueError("Envía motor, voz Piper y, opcionalmente, modo y voz de Qwen.")
+    with WRITE_LOCK:
+        value = json.loads((CONFIG / "channel.json").read_text())
+        value.update(payload)
+        validated = validate(value)
+        if validated["tts_engine"] == "piper":
+            from news_orchestrator.piper_assets import voice
+            if not voice(validated["piper_voice"])["ready"]:
+                raise ValueError("Descarga la voz de Piper antes de seleccionarla.")
+        atomic_json(CONFIG / "channel.json", validated)
+    return {key: validated[key] for key in ("tts_engine", "piper_voice", "voice_mode", "qwen_voice_id")}
 
 
 def editorial():

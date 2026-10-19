@@ -1,13 +1,81 @@
 (() => {
   const el = (id) => document.getElementById(id);
-  const stages = { queued: "En cola", extracting: "Descargando texto", drafting: "Redactando en español", voicing: "Generando voz con Qwen", downloading: "Recuperando audio", rendering: "Preparando vídeo", packaging: "Preparando emisión", ready: "Terminado", superseded: "Sustituido por noticias más recientes" };
+  const stages = { queued: "En cola", extracting: "Descargando texto", drafting: "Redactando en español", voicing: "Generando voz", downloading: "Recuperando audio", rendering: "Preparando vídeo", packaging: "Preparando emisión", ready: "Terminado", superseded: "Sustituido por noticias más recientes" };
   let hls;
   let timer;
   let playlistSignature;
   let youtubeBusy = false;
   let youtubeStatus;
+  let narrationDirty = false;
+  let narrationBusy = false;
+  let qwenVoices = [];
+  let savedQwenId = "";
+  let savedQwenName = "";
+  let piperLabels = { "es_ES-davefx-medium": "Davefx · Español (España)" };
   const date = (value) => value ? new Date(value).toLocaleString("es-ES") : "—";
   const node = (tag, text, cls) => { const value = document.createElement(tag); value.textContent = text; if (cls) value.className = cls; return value; };
+  function narrationControls() {
+    const piper = el("tts-engine").value === "piper";
+    el("piper-voice-label").hidden = !piper;
+    el("piper-voice").disabled = narrationBusy || !piper;
+    el("qwen-mode-label").hidden = piper;
+    el("qwen-voice-label").hidden = piper || el("qwen-mode").value !== "fixed";
+    el("qwen-mode").disabled = narrationBusy || piper;
+    el("qwen-voice").disabled = narrationBusy || piper;
+    el("tts-engine").disabled = narrationBusy;
+    el("narration-save").disabled = narrationBusy;
+    el("narration-description").textContent = piper
+      ? "Piper usa voces ya entrenadas de su catálogo; por ahora está disponible Davefx. Las grabaciones que añadas a la biblioteca son para clonar voces con Qwen."
+      : "Qwen usa las referencias de la biblioteca. Puedes añadir, editar, escuchar, desactivar o eliminar voces desde «Gestionar voces clonadas».";
+  }
+  async function loadQwenVoices() {
+    const button = el("qwen-voices-refresh");
+    button.disabled = true;
+    el("qwen-voices-status").textContent = "Consultando biblioteca…";
+    try {
+      const response = await fetch("/api/voices");
+      const value = await response.json();
+      if (!response.ok) throw new Error(value.error || "No se pudo consultar Qwen.");
+      qwenVoices = value.voices;
+      const selected = el("qwen-voice").value || savedQwenId;
+      const active = qwenVoices.filter((voice) => voice.enabled !== false);
+      el("qwen-voice").replaceChildren(new Option("Selecciona una voz activa", ""), ...active.map((v) => new Option(v.name, v.id)));
+      el("qwen-voice").value = selected || active.find((v) => v.name.toLocaleLowerCase() === savedQwenName.toLocaleLowerCase())?.id || "";
+      const allowed = (value.voice_names || []).map((v) => v.toLocaleLowerCase());
+      const excluded = (value.voice_exclude || []).map((v) => v.toLocaleLowerCase());
+      const eligible = active.filter((v) => !excluded.includes(v.name.toLocaleLowerCase()) && (!allowed.length || allowed.includes(v.name.toLocaleLowerCase())));
+      el("qwen-voices-status").textContent = `${qwenVoices.length} voces guardadas · ${active.length} activas · ${eligible.length} disponibles para selección aleatoria del canal.${excluded.length || allowed.length ? " Se respetan los filtros de nombres de channel.json." : ""}`;
+      if (!active.length) el("qwen-voices-status").textContent += " Añade o activa una voz antes de producir con Qwen.";
+      else if (savedQwenId && !active.some((v) => v.id === savedQwenId)) el("qwen-voices-status").textContent += " La voz fija guardada ya no está activa; se usará otra disponible.";
+    } catch (error) {
+      el("qwen-voices-status").textContent = "La biblioteca de Qwen no está disponible. Arranca su servicio para gestionarla y pulsa «Actualizar biblioteca». Piper puede seguir funcionando.";
+    } finally { button.disabled = false; }
+  }
+  async function loadNarration() {
+    try {
+      const response = await fetch("/api/narration");
+      const value = await response.json();
+      if (!response.ok) throw new Error(value.error || "No se pudo leer la configuración de voz.");
+      piperLabels = Object.fromEntries(value.piper_voices.map((voice) => [voice.id, voice.label]));
+      el("piper-voice").replaceChildren(...value.piper_voices.map((voice) => {
+        const option = new Option(`${voice.label}${voice.ready ? "" : " · pendiente de descarga"}`, voice.id);
+        option.disabled = !voice.ready;
+        return option;
+      }));
+      if (!narrationDirty) {
+        el("tts-engine").value = value.tts_engine;
+        el("piper-voice").value = value.piper_voice;
+        el("qwen-mode").value = value.voice_mode;
+        savedQwenId = value.qwen_voice_id || "";
+        savedQwenName = value.voice_name || "";
+      }
+      const libraryUrl = new URL(value.qwen_web_url);
+      if (["localhost", "127.0.0.1", "[::1]"].includes(libraryUrl.hostname)) libraryUrl.hostname = location.hostname;
+      el("voice-library-link").href = libraryUrl.href;
+      narrationControls();
+      if (value.tts_engine === "qwen") loadQwenVoices();
+    } catch (error) { el("narration-message").textContent = error.message; }
+  }
   function link(text, href, download = false) {
     const value = node("a", text); value.href = href;
     if (download) value.download = ""; else { value.target = "_blank"; value.rel = "noopener noreferrer"; }
@@ -29,6 +97,9 @@
     el("youtube-error").textContent = value.error || "";
     const parts = [];
     if (value.last_progress_at) parts.push(`Último avance: ${date(value.last_progress_at)}`);
+    if (value.audio_mode === "continuous_aac") parts.push("Audio con reloj continuo");
+    if (typeof value.media_rate === "number") parts.push(`Ritmo: ${value.media_rate.toFixed(2)}×`);
+    if (typeof value.lag_seconds === "number") parts.push(`Retraso del envío: ${value.lag_seconds.toFixed(1)} s`);
     if (value.reconnects) parts.push(`Reconexiones del servicio: ${value.reconnects}`);
     if (value.retry_at && value.state === "retrying") parts.push(`Próximo intento: ${date(value.retry_at)}`);
     el("youtube-metrics").textContent = parts.join(" · ");
@@ -66,13 +137,18 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "No se pudo leer el estado.");
       const settings = data.settings;
+      if (!narrationDirty && !narrationBusy) {
+        el("tts-engine").value = settings.tts_engine || "qwen";
+        el("piper-voice").value = settings.piper_voice || "es_ES-davefx-medium";
+        narrationControls();
+      }
       renderYoutube(data.youtube);
       youtubeLogs();
       const maxRetries = data.max_retries ?? 3;
       el("channel-title").textContent = settings.channel_name;
       el("automatic-state").textContent = settings.enabled ? "Activa · Sin intervención humana" : "Producción pausada en la configuración";
       el("settings").replaceChildren();
-      for (const [name, value] of [["Tema", settings.topic], ["Voces", settings.voice_mode === "random" ? "Al azar por noticia" : settings.voice_name], ["Fuentes", settings.platform === "all" ? "Medios, Reddit, Mastodon, Bluesky y búsqueda SearXNG" : settings.platform === "web" ? "Medios y fuentes oficiales" : settings.platform], ["Reserva", `Hasta ${settings.max_age_hours / 24} días; actualidad por fuente`], ["Frecuencia", `${settings.scan_interval_seconds / 3600} hora(s)`], ["Última revisión", date(data.last_scan_at)], ["Próxima revisión", date(data.next_scan_at)]]) {
+      for (const [name, value] of [["Tema", settings.topic], ["Motor de voz", settings.tts_engine === "piper" ? "Piper" : "Qwen TTS"], ["Voces", settings.tts_engine === "piper" ? piperLabels[settings.piper_voice] || "Voz seleccionada" : settings.voice_mode === "random" ? "Al azar por noticia" : settings.voice_name], ["Fuentes", settings.platform === "all" ? "Medios, Reddit, Mastodon, Bluesky y búsqueda SearXNG" : settings.platform === "web" ? "Medios y fuentes oficiales" : settings.platform], ["Reserva", `Hasta ${settings.max_age_hours / 24} días; actualidad por fuente`], ["Búsqueda de noticias", `Cada ${settings.scan_interval_seconds / 3600} hora(s)`], ["Renovación de parrilla", `Hasta ${settings.new_stories_per_hour} noticias nuevas por hora`], ["Última revisión", date(data.last_scan_at)], ["Próxima revisión", date(data.next_scan_at)]]) {
         el("settings").append(node("dt", name), node("dd", value));
       }
       const balance = data.source_balance;
@@ -96,6 +172,14 @@
       el("scan").textContent = data.scanning ? "Revisando fuentes…" : "Revisar noticias ahora";
       const counts = data.inventory || {};
       if (el("production-summary")) el("production-summary").textContent = `${data.playlist.length} de ${settings.max_playlist} listas · ${counts.running || 0} en producción · ${counts.queued || 0} en cola · ${counts.retry || 0} aplazadas · ${counts.waiting || 0} en reserva${data.presentation_active_id ? " · Actualizando presentación de una pieza terminada" : ""}`;
+      if (el("rotation-status") && data.rotation) {
+        const pace = data.rotation;
+        const timing = data.active_id ? "Producción en curso."
+          : !settings.enabled ? "Producción desactivada en la configuración."
+          : !pace.can_start ? `Pausa programada. Próximo inicio permitido: ${date(pace.next_start_at)}.`
+          : "Producción disponible cuando haya una candidata elegible.";
+        el("rotation-status").textContent = `${pace.published_last_hour} de ${pace.target_per_hour} incorporaciones en los últimos 60 minutos. ${timing}`;
+      }
       if (el("scan-summary")) {
         const scan = data.scan_count || {};
         el("scan-summary").textContent = data.scanning
@@ -120,7 +204,7 @@
             card.append(preview);
           }
           card.append(node("p", `${date(job.published_at)} · ${job.result.duration_seconds} s`, "source"));
-          card.append(node("h3", job.result.title), node("p", `${job.article.source_name} · Voz: ${job.result.voice_name}`, "source"));
+          card.append(node("h3", job.result.title), node("p", `${job.article.source_name} · ${job.result.tts_engine === "piper" ? "Piper" : "Qwen"} · Voz: ${job.result.voice_name}`, "source"));
           if (job.result.presentation?.intro_music) card.append(node("p", `Intro: ${job.result.presentation.intro_music.name}`, "source"));
           if (job.result.presentation?.voice_normalization) card.append(node("p", "Voz normalizada", "source"));
           const links = node("div", "", "links");
@@ -142,7 +226,7 @@
         card.append(node("h3", job.work.title || job.article.title));
         card.append(node("p", job.status === "retry" ? `Reintento ${Math.min(job.failures, maxRetries)} de ${maxRetries}: ${date(job.retry_at)}` : job.status === "queued" ? `En cola · posición ${(job.queue_rank ?? 0) + 1}` : stages[job.stage] || job.stage, "stage"));
         card.append(node("p", `${job.article.source_name} · ${date(job.published_at)}`, "hint"));
-        if (job.work.voice_id) card.append(node("p", `Voz: ${job.work.voice_name}`, "hint"));
+        if (job.work.voice_id || job.work.piper_voice) card.append(node("p", `${job.work.tts_engine === "piper" ? "Piper" : "Qwen"} · Voz: ${job.work.voice_name}`, "hint"));
         if (job.work.intro_music) card.append(node("p", `Intro: ${job.work.intro_music.name}`, "hint"));
         if (job.error) card.append(node("p", job.error, "error"));
         el("production").append(card);
@@ -204,5 +288,30 @@
   el("youtube-start").addEventListener("click", () => youtubeAction("start"));
   el("youtube-stop").addEventListener("click", () => youtubeAction("stop"));
   el("youtube-log-details").addEventListener("toggle", youtubeLogs);
+  el("qwen-voices-refresh").addEventListener("click", loadQwenVoices);
+  for (const id of ["tts-engine", "piper-voice", "qwen-mode", "qwen-voice"]) el(id).addEventListener("change", () => {
+    narrationDirty = true;
+    el("narration-message").textContent = "Cambios pendientes de guardar.";
+    narrationControls();
+    if (id === "tts-engine" && el("tts-engine").value === "qwen") loadQwenVoices();
+  });
+  el("narration-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (narrationBusy) return;
+    narrationBusy = true;
+    narrationControls();
+    try {
+      const response = await fetch("/api/narration", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tts_engine: el("tts-engine").value, piper_voice: el("piper-voice").value,
+          voice_mode: el("qwen-mode").value, qwen_voice_id: el("qwen-voice").value || savedQwenId }) });
+      const value = await response.json();
+      if (!response.ok) throw new Error(value.error || "No se pudo guardar el motor de voz.");
+      narrationDirty = false;
+      savedQwenId = value.qwen_voice_id;
+      el("narration-message").textContent = value.tts_engine === "piper" ? "Guardado: Piper con la voz seleccionada." : "Guardado: Qwen con las voces clonadas del canal.";
+    } catch (error) { el("narration-message").textContent = error.message; }
+    finally { narrationBusy = false; narrationControls(); refresh(); }
+  });
+  loadNarration();
   refresh();
 })();

@@ -8,7 +8,7 @@ import os
 import threading
 import time
 
-from news_orchestrator import config, discovery, intros, media, presentation, retention, visuals, youtube_control, voices as voice_selection
+from news_orchestrator import config, discovery, intros, media, narration, presentation, retention, visuals, youtube_control
 from news_orchestrator.client import Client, RemoteError
 from news_orchestrator.store import MAX_RETRIES, Store, now, after
 
@@ -26,6 +26,7 @@ class Pipeline:
         self.store.recover()
         self.news = Client("NEWS_RADIO_URL", "http://127.0.0.1:8790")
         self.tts = Client("QWENTTS_URL", "http://127.0.0.1:8791")
+        self.narration = narration.Narration(self.tts, self.store)
         self.stop = threading.Event()
         self.requested = threading.Event()
         self.requested.set()  # Rebuild the reservoir from the library on startup.
@@ -114,11 +115,14 @@ class Pipeline:
                 if not settings["enabled"]:
                     self.stop.wait(2)
                     continue
+                pace = self.store.rotation(settings)
+                if not pace["can_start"]:
+                    self.store.set_state("production_error", "")
+                    self.stop.wait(min(10, max(1, pace["wait_seconds"])))
+                    continue
                 # Service outages do not consume or repeatedly submit queued work.
                 self.news.request("/health", timeout=5)
-                tts_status = self.tts.request("/api/status", timeout=5)
-                if not tts_status.get("model_ready"):
-                    raise RuntimeError("El modelo de Qwen aún no está disponible.")
+                self.narration.ready(settings)
                 self.store.set_state("production_error", "")
                 job = self.store.claim(settings)
                 if job:
@@ -166,6 +170,14 @@ class Pipeline:
     def produce(self, job, settings):
         job_id = job["id"]
         work = job["work"]
+        # Saved drafts can outlive changes to the playlist. Recheck before
+        # spending more resources, while allowing already submitted TTS to finish.
+        if not work.get("tts_id") and not self.store.admits(job, settings):
+            reason = "La noticia ya no cumple la selección de parrilla; se omite antes de redactar o generar voz."
+            self.store.skip(job_id, reason)
+            self.store.event(reason, job_id)
+            return
+        work.setdefault("production_started_at", now())
         directory = config.DATA / "media" / job_id
         directory.mkdir(exist_ok=True)
         def step(stage):
@@ -173,6 +185,9 @@ class Pipeline:
             if self.stop.is_set():
                 raise InterruptedError()
 
+        if "tts_engine" not in work:
+            work["tts_engine"] = narration.engine(work, settings)
+            step(job["stage"])
         if "intro_music" not in work:
             work["intro_music"] = intros.select(directory, settings["intro_music_enabled"],
                                                 self.store.state("last_intro_name"))
@@ -182,6 +197,7 @@ class Pipeline:
         if "instructions" not in work:
             work.update({"instructions": config.editorial(), "channel_name": settings["channel_name"],
                          "voice_mode": settings["voice_mode"], "voice_name": settings["voice_name"],
+                         "qwen_voice_id": settings.get("qwen_voice_id", ""),
                          "tts_language": settings["tts_language"]})
         if not work.get("draft_id"):
             step("extracting")
@@ -197,8 +213,11 @@ class Pipeline:
                     self.store.skip(job_id, reason)
                     self.store.event(reason, job_id)
                     return
-                job["article"]["discovery_published_at"] = job["article"]["published_at"]
+                job["article"].setdefault("discovery_published_at", job["article"]["published_at"])
                 job["article"]["published_at"] = material["published_at"]
+                # Admission sorts by the job's top-level date, just like the
+                # final publication. Keep memory and SQLite in agreement.
+                job["published_at"] = material["published_at"]
                 self.store.publication(job_id, job["article"], material["published_at"])
                 if not self.store.admits(job, settings):
                     reason = "Con la fecha real del artículo, la política de selección conserva otras noticias de la parrilla."
@@ -228,46 +247,27 @@ class Pipeline:
                 raise RuntimeError("La redacción no tiene texto utilizable por el servicio de voz.")
             work.update({"script": script, "title": result["title"], "notes": result.get("notes", [])})
             step("voicing")
-        if not work.get("tts_id"):
-            voices = self.tts.request("/api/voices")["voices"]
-            if not work.get("voice_id"):
-                choice_settings = {**settings, "voice_mode": work.get("voice_mode", settings["voice_mode"])}
-                if choice_settings["voice_mode"] == "fixed":
-                    choice_settings["voice_name"] = work["voice_name"]
-                voice = voice_selection.choose(voices, choice_settings, self.store.state("last_voice_id"))
-                work.update({"voice_id": voice["id"], "voice_name": voice["name"]})
-                step("voicing")  # Save the random choice before the remote request.
-                self.store.set_state("last_voice_id", voice["id"])
-            voice = next((voice for voice in voices if voice["id"] == work["voice_id"]), None)
-            if not voice:
-                raise RuntimeError(f"La voz configurada '{work['voice_name']}' no está importada en Qwen TTS.")
-            work["voice_id"] = voice["id"]
-            value = self.tts.request("/api/jobs", {"text": work["script"], "voice_id": voice["id"],
-                                                  "language": work["tts_language"],
-                                                  "request_key": f"orch:{job_id}:tts:{work.get('tts_generation', 0)}"})
-            work["tts_id"] = value["id"]
-            step("voicing")
+        if not work.get("tts_id") and not self.store.admits(job, config.load()):
+            reason = "La noticia ya no cumple la selección de parrilla; se omite antes de generar la locución."
+            self.store.skip(job_id, reason)
+            self.store.event(reason, job_id)
+            return
         card_article = {**job["article"], "source_url": work.get("source_url") or job["article"].get("linked_url") or job["article"]["url"]}
         visual = visuals.plan(card_article, job_id)
         if not presentation.current(directory, settings, work.get("intro_music"), visual):
-            tts = self.wait_remote(self.tts, f"/api/jobs/{work['tts_id']}", {"preparing", "queued", "waiting", "running"}, 10800)
-            if tts["status"] != "ready":
-                work.pop("tts_id", None)
-                work["tts_generation"] = work.get("tts_generation", 0) + 1
-                step("voicing")
-                raise RuntimeError(tts.get("error") or "Qwen no pudo terminar el audio.")
-            step("downloading")
-            work["tts_metrics"] = tts["result"]
+            step("voicing")
+            self.narration.generate(job_id, work, settings, directory, self.stop, step, self.wait_remote)
         step("rendering")
         with self.media_lock:
             info, audio_profile = presentation.prepare(
                 directory, card_article, work["title"], work["channel_name"], settings, self.stop,
-                lambda target: self.tts.download(f"/api/jobs/{work['tts_id']}/audio.wav", target),
+                lambda target: self.narration.source(work, directory, target),
                 intro=work.get("intro_music"), visual=visual)
         step("packaging")
         result = {"title": work["title"], "script": work["script"], "notes": work.get("notes", []),
                   "duration_seconds": round(float(info["format"]["duration"]), 2),
                   "presentation": audio_profile,
+                  "tts_engine": work["tts_engine"],
                   "voice_name": work["voice_name"], "source_url": work.get("source_url") or job["article"].get("linked_url") or job["article"]["url"],
                   "tts": work.get("tts_metrics", {}),
                   "video_url": f"/media/{job_id}/video.mp4", "mp3_url": f"/media/{job_id}/audio.mp3"}
@@ -299,11 +299,10 @@ class Pipeline:
                             if presentation.current(directory, settings, intro, visual) and job["result"].get("presentation") == wanted:
                                 continue
                             self.presentation_active_id = job["id"]
-                            tts_id = job["work"].get("tts_id")
                             info, audio_profile = presentation.prepare(
                                 directory, card_article, job["result"]["title"],
                                 job["work"].get("channel_name", settings["channel_name"]), settings, self.stop,
-                                lambda target: self.tts.download(f"/api/jobs/{tts_id}/audio.wav", target), intro=intro, visual=visual)
+                                lambda target: self.narration.source(job["work"], directory, target), intro=intro, visual=visual)
                         result = {**job["result"], "duration_seconds": round(float(info["format"]["duration"]), 2),
                                   "presentation": audio_profile}
                         self.store.update_presentation(job["id"], result)
@@ -333,10 +332,12 @@ class Pipeline:
         except (ValueError, OSError):
             broadcast = {}
         return {"settings": settings, "scanning": self.scanning, "active_id": self.active_id,
+                "rotation": self.store.rotation(settings),
                 "presentation_active_id": self.presentation_active_id,
                 "presentation_error": self.store.state("presentation_error", ""),
                 "cleanup_error": self.store.state("cleanup_error", ""),
                 "last_cleanup_at": self.store.state("last_cleanup_at"),
+                "qwen_cleanup_pending": self.store.state("qwen_cleanup_pending", 0),
                 "inventory": self.store.inventory(), "source_warnings": self.store.state("source_warnings", []),
                 "source_balance": self.store.source_balance(settings),
                 "playlist": self.store.playlist(), "jobs": self.store.jobs(), "events": self.store.events(),

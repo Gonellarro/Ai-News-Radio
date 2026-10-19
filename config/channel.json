@@ -7,6 +7,7 @@
   "source_ids": [],
   "language": "all",
   "scan_interval_seconds": 3600,
+  "new_stories_per_hour": 5,
   "max_age_hours": 168,
   "max_playlist": 20,
   "max_pending": 10,
@@ -15,6 +16,8 @@
     "weights": {}
   },
   "voice_name": "cristina",
+  "tts_engine": "qwen",
+  "piper_voice": "es_ES-davefx-medium",
   "voice_mode": "random",
   "voice_names": [],
   "voice_exclude": ["qwen-demo-en"],

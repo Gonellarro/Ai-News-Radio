@@ -8,7 +8,7 @@ import sqlite3
 import unicodedata
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from news_orchestrator import balancing
+from news_orchestrator import balancing, narration, rotation
 
 MAX_RETRIES = 3  # One initial attempt, followed by at most three retries.
 
@@ -83,6 +83,7 @@ class Store:
                 platform TEXT NOT NULL, recorded_at TEXT NOT NULL
             )""")
             db.execute("CREATE INDEX IF NOT EXISTS publications_by_source ON source_publications(source_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS publications_by_time ON source_publications(recorded_at)")
             # Backfill once, including retired clips whose media was removed.
             # Each clip counts once, never once per loop, retry or visual update.
             if not db.execute("SELECT 1 FROM state WHERE key='source_history_initialized_at'").fetchone():
@@ -219,6 +220,21 @@ class Store:
             db.execute("BEGIN")
             return balancing.admits(job, self._active(db), self._published_counts(db), settings)
 
+    @staticmethod
+    def _rotation(db, settings):
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        publications = [row[0] for row in db.execute(
+            "SELECT recorded_at FROM source_publications WHERE recorded_at>? ORDER BY recorded_at", (cutoff,))]
+        last = db.execute("""SELECT p.recorded_at,j.work FROM source_publications p
+            JOIN jobs j ON j.id=p.job_id ORDER BY p.recorded_at DESC,p.job_id DESC LIMIT 1""").fetchone()
+        started = (json.loads(last["work"]).get("production_started_at") or last["recorded_at"]) if last else None
+        return rotation.plan(settings["new_stories_per_hour"], publications, started)
+
+    def rotation(self, settings):
+        with self.connect() as db:
+            db.execute("BEGIN")
+            return self._rotation(db, settings)
+
     def discover(self, articles, settings):
         inserted = 0
         with self.connect() as db:
@@ -257,6 +273,9 @@ class Store:
         slots = max(0, settings["max_pending"] - len(running))
         candidates = [Store.decode(row) for row in db.execute("""SELECT * FROM jobs
             WHERE status IN ('queued','waiting','retry') AND retry_at<=?""", (now(),))]
+        # Voice work already started in another backend waits for that engine
+        # to be selected again. It must not hold up the currently enabled one.
+        candidates = [job for job in candidates if narration.engine(job["work"], settings) == settings["tts_engine"]]
         pending = balancing.select(candidates, published, running, active, slots, settings)
         db.execute("UPDATE jobs SET queue_rank=NULL WHERE status!='running'")
         db.execute("UPDATE jobs SET status='waiting' WHERE status='queued'")
@@ -268,6 +287,8 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._trim(db, settings)
+            if not self._rotation(db, settings)["can_start"]:
+                return None
             row = db.execute("""SELECT * FROM jobs WHERE status IN ('queued','retry') AND retry_at<=?
                 AND queue_rank IS NOT NULL ORDER BY queue_rank,id LIMIT 1""", (now(),)).fetchone()
             if row:

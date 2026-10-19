@@ -94,7 +94,8 @@ def public_status():
             "server": SERVER, "worker_online": online, "state": state,
             "error": redact(str(worker.get("error", "")), settings["stream_key"])[:1500],
             **{key: worker.get(key) for key in ("updated_at", "started_at", "last_progress_at", "retry_at",
-                                               "reconnects", "sent_bytes", "video_seconds")}}
+                                               "reconnects", "sent_bytes", "video_seconds", "media_rate",
+                                               "lag_seconds", "audio_mode", "input_discontinuities")}}
 
 
 def update_key(value):
