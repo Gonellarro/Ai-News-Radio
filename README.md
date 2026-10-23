@@ -15,8 +15,8 @@ posterior para los scripts. El código también puede arrancarse directamente co
 Compose. Esta distribución inicial usa CPU; no requiere GPU.
 
 ```bash
-git clone <URL_DEL_REPOSITORIO>
-cd ai-news-radio
+git clone https://github.com/Gonellarro/Ai-News-Radio.git
+cd Ai-News-Radio
 ./scripts/install.sh --tts piper
 ```
 

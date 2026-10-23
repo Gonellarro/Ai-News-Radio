@@ -12,15 +12,15 @@ dependencia de una red privada. Las dependencias de terceros conservan sus aviso
 Antes de publicar:
 
 1. El código propio ya incluye `LICENSE` con la licencia MIT elegida por el autor.
-2. Crea un repositorio vacío llamado, por ejemplo, `ai-news-radio` en GitHub.
+2. Repositorio oficial: https://github.com/Gonellarro/Ai-News-Radio.
 3. En esta carpeta configura el remoto y sube la rama y las etiquetas:
 
 ```bash
-git remote add origin https://github.com/TU_USUARIO/ai-news-radio.git
+git remote add origin https://github.com/Gonellarro/Ai-News-Radio.git
 git push -u origin main
 git push origin --tags
 ```
 
-La creación del remoto y el envío no se ejecutan automáticamente. Nunca publiques
+El remoto oficial es `origin`; los comandos anteriores sirven para una copia sin remoto. Nunca publiques
 `state/`, `.env` ni un archivo de `backups/`. El archivo de verificación del montaje
 documenta qué se ha comprobado y qué pruebas reales siguen dependiendo del destino.
