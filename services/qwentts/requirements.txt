@@ -1,0 +1,7 @@
+# Official Qwen package; install CPU PyTorch first in Dockerfile.
+qwen-tts==0.1.1
+transformers==4.57.3
+accelerate==1.12.0
+numpy==2.2.6
+soundfile==0.13.1
+huggingface-hub==0.36.0
