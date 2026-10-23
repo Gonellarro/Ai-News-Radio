@@ -5,12 +5,14 @@ import fcntl
 import json
 import logging
 import os
+import sqlite3
 import threading
 import time
 
-from news_orchestrator import config, discovery, intros, media, narration, presentation, retention, visuals, youtube_control
+from news_orchestrator import config, discovery, intros, media, narration, presentation, retention, scheduling, visuals, youtube_control
 from news_orchestrator.client import Client, RemoteError
 from news_orchestrator.store import MAX_RETRIES, Store, now, after
+from news_orchestrator.relevance import Evaluator
 
 
 class Pipeline:
@@ -29,16 +31,19 @@ class Pipeline:
         self.narration = narration.Narration(self.tts, self.store)
         self.stop = threading.Event()
         self.requested = threading.Event()
-        self.requested.set()  # Rebuild the reservoir from the library on startup.
+        self.manual_requested = threading.Event()
+        self.requested.set()  # Rebuild from cached news only; no off-clock refresh.
         self.scanning = False
         self.active_id = None
         self.presentation_active_id = None
         self.media_lock = threading.Lock()
+        self.activity_lock = threading.RLock()
+        self.relevance = Evaluator(self)
         self.threads = []
 
     def start(self):
         for name, method in [("discovery", self.discovery), ("production", self.production), ("presentation", self.presentations),
-                             ("cleanup", self.cleanup)]:
+                             ("cleanup", self.cleanup), ("relevance", self.relevance.run)]:
             thread = threading.Thread(target=method, name=name, daemon=True)
             self.threads.append(thread)
             thread.start()
@@ -49,32 +54,69 @@ class Pipeline:
             thread.join(timeout=3)
 
     def discovery(self):
+        was_enabled = False
+        reset_clock = True
+        recovering = self.store.cycle()
+        recover_id = recovering["id"] if recovering and recovering["status"] == "collecting" else None
         while not self.stop.is_set():
+            cycle_id = None
+            refresh = False
             try:
                 settings = config.load()
-                due = self.store.state("next_scan_at", "") <= now()
-                if settings["enabled"] and (due or self.requested.is_set()):
+                deadline = scheduling.synchronize(self.store, settings, reset=reset_clock or (settings["enabled"] and not was_enabled))
+                reset_clock = False
+                was_enabled = settings["enabled"]
+                due = settings["enabled"] and deadline <= now()
+                manual = self.manual_requested.is_set()
+                if due or manual or (settings["enabled"] and recover_id):
+                    refresh = True
                     self.requested.clear()
+                    self.manual_requested.clear()
+                    if due:
+                        scheduling.advance(self.store, settings)
+                    cycle_id = recover_id or self.store.start_cycle(settings, "manual" if manual else "scheduled", deadline if due else None)
+                    recover_id = None
                     self.scanning = True
                     self.scan(settings)
-                    self.store.set_state("next_scan_at", after(settings["scan_interval_seconds"]))
+                    self.store.finish_collection(cycle_id, config.load())
+                    self.store.event(f"Actualización lista: se producirán hasta {settings['new_stories_per_update']} noticias seguidas.")
+                elif settings["enabled"] and self.requested.is_set():
+                    self.requested.clear()
+                    # Refill from the saved library without touching source
+                    # refresh intervals or opening a new production allowance.
+                    articles = discovery.candidates(self.news, settings, self.stop)
+                    with self.media_lock:
+                        self.store.discover(articles, settings)
                 self.store.set_state("configuration_error", "")
             except InterruptedError:
                 break
             except Exception as exc:
                 logging.exception("Discovery failed")
-                self.store.set_state("scan_error", str(exc)[:1500])
-                self.store.set_state("next_scan_at", after(300))
-                self.store.event("No se pudo completar la recopilación; se reintentará: " + str(exc)[:500])
+                self.store.report_error("scan_error", exc)
+                try:
+                    if cycle_id:
+                        self.store.finish_collection(cycle_id, settings, error=str(exc))
+                    self.store.event("No se pudo completar la recopilación; se conserva el siguiente horario programado: " + str(exc)[:500])
+                except sqlite3.Error:
+                    logging.exception("Could not persist failed collection")
             finally:
                 self.scanning = False
+                if refresh:
+                    # A manual scan never moves a future scheduled slot. If a
+                    # slow scan crosses it, skip backlog and keep the clock grid.
+                    try:
+                        current_settings = config.load()
+                        if self.store.state("next_scan_at", "") <= now():
+                            scheduling.advance(self.store, current_settings)
+                    except (ValueError, OSError, sqlite3.Error) as exc:
+                        self.store.report_error("configuration_error", exc)
             self.stop.wait(2)
 
     def scan(self, settings):
         self.store.set_state("scan_started_at", now())
         self.store.event("Recopilación automática de noticias iniciada.")
-        # Let production start from already saved material while remote sources
-        # refresh; a slow search engine must not leave the producer idle.
+        # Persist cached candidates, but open production only after collection
+        # finishes, so the whole batch can consider the refreshed library.
         initial = discovery.candidates(self.news, settings, self.stop)
         with self.media_lock:
             count = self.store.discover(initial, settings)
@@ -106,6 +148,7 @@ class Pipeline:
         self.store.set_state("last_scan_count", {"found": len(articles), "new": count,
                                                 "recent_24h": sum(a["published_at"] >= recent for a in articles)})
         self.store.event(f"Recopilación terminada: {len(articles)} candidatas, {count} nuevas incorporadas a la reserva. Selección de fuentes: {settings['balancing']['strategy']}.")
+        self.relevance.requested.set()
 
     def production(self):
         while not self.stop.is_set():
@@ -124,9 +167,18 @@ class Pipeline:
                 self.news.request("/health", timeout=5)
                 self.narration.ready(settings)
                 self.store.set_state("production_error", "")
-                job = self.store.claim(settings)
+                # Reserve a complete production, not a single model call.
+                # Manual relevance requests reserve the next full slot.
+                with self.activity_lock:
+                    held = self.relevance.blocks_production()
+                    if not held:
+                        job = self.store.claim(settings)
+                        if job:
+                            self.active_id = job["id"]
+                if held:
+                    self.stop.wait(1)
+                    continue
                 if job:
-                    self.active_id = job["id"]
                     self.produce(job, settings)
                 else:
                     inventory = self.store.inventory()
@@ -141,19 +193,32 @@ class Pipeline:
                 break
             except Exception as exc:
                 logging.exception("Production failed")
-                if job:
-                    busy = isinstance(exc, RemoteError) and exc.status == 409
-                    status = self.store.retry(job["id"], str(exc), busy=busy)
-                    if status == "discarded":
-                        self.store.event(f"Noticia descartada automáticamente tras agotar {MAX_RETRIES} reintentos: "
-                                         + str(exc)[:500], job["id"])
-                    elif status == "retry":
-                        self.store.event("Producción aplazada automáticamente: " + str(exc)[:500], job["id"])
-                else:
-                    self.store.set_state("production_error", str(exc)[:1500])
+                try:
+                    if job:
+                        busy = isinstance(exc, RemoteError) and exc.status == 409
+                        status = self.store.retry(job["id"], str(exc), busy=busy)
+                        if status == "discarded":
+                            self.store.event(f"Noticia descartada automáticamente tras agotar {MAX_RETRIES} reintentos: "
+                                             + str(exc)[:500], job["id"])
+                        elif status == "retry":
+                            self.store.event("Producción aplazada automáticamente: " + str(exc)[:500], job["id"])
+                    else:
+                        self.store.report_error("production_error", exc)
+                except sqlite3.Error:
+                    logging.exception("Could not persist failed production; waiting for database recovery")
+                    # Keep ownership of the complete job until its retry is
+                    # saved. Never strand it as 'running' while claiming another.
+                    while job and not self.stop.wait(2):
+                        try:
+                            self.store.retry(job["id"], str(exc), busy=busy)
+                            break
+                        except sqlite3.Error:
+                            logging.exception("Database still busy while saving production retry")
+                if not job:
                     self.stop.wait(15)
             finally:
-                self.active_id = None
+                with self.activity_lock:
+                    self.active_id = None
             self.stop.wait(2)
 
     def wait_remote(self, client, path, running, timeout):
@@ -173,7 +238,7 @@ class Pipeline:
         # Saved drafts can outlive changes to the playlist. Recheck before
         # spending more resources, while allowing already submitted TTS to finish.
         if not work.get("tts_id") and not self.store.admits(job, settings):
-            reason = "La noticia ya no cumple la selección de parrilla; se omite antes de redactar o generar voz."
+            reason = "No hay plaza disponible: la noticia se ha excluido manualmente o toda la parrilla está fijada. Se omite antes de redactar o generar voz."
             self.store.skip(job_id, reason)
             self.store.event(reason, job_id)
             return
@@ -220,7 +285,7 @@ class Pipeline:
                 job["published_at"] = material["published_at"]
                 self.store.publication(job_id, job["article"], material["published_at"])
                 if not self.store.admits(job, settings):
-                    reason = "Con la fecha real del artículo, la política de selección conserva otras noticias de la parrilla."
+                    reason = "No hay plaza disponible: la noticia se ha excluido manualmente o toda la parrilla está fijada."
                     self.store.skip(job_id, reason)
                     self.store.event(reason, job_id)
                     return
@@ -248,7 +313,7 @@ class Pipeline:
             work.update({"script": script, "title": result["title"], "notes": result.get("notes", [])})
             step("voicing")
         if not work.get("tts_id") and not self.store.admits(job, config.load()):
-            reason = "La noticia ya no cumple la selección de parrilla; se omite antes de generar la locución."
+            reason = "No hay plaza disponible: la noticia se ha excluido manualmente o toda la parrilla está fijada. Se omite antes de generar la locución."
             self.store.skip(job_id, reason)
             self.store.event(reason, job_id)
             return
@@ -273,7 +338,7 @@ class Pipeline:
                   "video_url": f"/media/{job_id}/video.mp4", "mp3_url": f"/media/{job_id}/audio.mp3"}
         admitted = self.store.publish(job_id, result, config.load())
         self.store.event("Vídeo terminado e incorporado automáticamente a la parrilla." if admitted else
-                         "Vídeo terminado; la política de selección conserva otras noticias de la parrilla.", job_id)
+                         "Vídeo terminado sin plaza disponible: la noticia se ha excluido manualmente o toda la parrilla está fijada.", job_id)
         # The lossless input is disposable once the finished video and MP3 exist.
         (directory / "audio.wav").unlink(missing_ok=True)
 
@@ -312,14 +377,14 @@ class Pipeline:
                     except Exception as exc:
                         failed = True
                         logging.exception("Presentation update failed")
-                        self.store.set_state("presentation_error", str(exc)[:1500])
+                        self.store.report_error("presentation_error", exc)
                     finally:
                         self.presentation_active_id = None
                 if not failed:
                     self.store.set_state("presentation_error", "")
             except Exception as exc:
                 logging.exception("Presentation maintenance failed")
-                self.store.set_state("presentation_error", str(exc)[:1500])
+                self.store.report_error("presentation_error", exc)
             self.stop.wait(30)
 
     def cleanup(self):
@@ -332,6 +397,8 @@ class Pipeline:
         except (ValueError, OSError):
             broadcast = {}
         return {"settings": settings, "scanning": self.scanning, "active_id": self.active_id,
+                "workers": {thread.name: thread.is_alive() for thread in self.threads},
+                "update_schedule": scheduling.public(settings),
                 "rotation": self.store.rotation(settings),
                 "presentation_active_id": self.presentation_active_id,
                 "presentation_error": self.store.state("presentation_error", ""),
@@ -341,6 +408,8 @@ class Pipeline:
                 "inventory": self.store.inventory(), "source_warnings": self.store.state("source_warnings", []),
                 "source_balance": self.store.source_balance(settings),
                 "playlist": self.store.playlist(), "jobs": self.store.jobs(), "events": self.store.events(),
+                "schedule": {"mode": self.store.state("playlist_mode", "automatic"),
+                             "next_id": self.store.state("next_play_id")},
                 "last_scan_at": self.store.state("last_scan_at"), "next_scan_at": self.store.state("next_scan_at"),
                 "scan_count": self.store.state("last_scan_count", {}), "scan_error": self.store.state("scan_error", ""),
                 "production_error": self.store.state("production_error", ""), "broadcast": broadcast,

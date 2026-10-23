@@ -39,9 +39,9 @@ desactivada hasta guardar una clave y solicitar el envío desde el panel.
    parrilla en una única transacción. Estas comprobaciones son técnicas; no hay
    evaluación ni aprobación editorial humana.
 9. Busca mantener **`max_playlist` noticias activas distintas**, ordenadas por publicación.
-   La política de balanceo decide qué conservar cuando entra una nueva, repartiendo
-   las plazas entre las fuentes disponibles y favoreciendo la actualidad dentro
-   de cada fuente. El vídeo que está sonando termina; los cambios se aplican entre piezas.
+   El balance y la IA eligen qué producir. Cada vídeo nuevo terminado sustituye
+   a la noticia que lleve más tiempo en parrilla, excepto las fijadas manualmente.
+   El vídeo que está sonando termina; los cambios se aplican entre piezas.
 10. Reproduce la parrilla en bucle. Si todavía no hay noticias terminadas, emite una
     pantalla de continuidad, sin inventar una noticia.
 
@@ -66,8 +66,8 @@ esperar a la próxima búsqueda. Los excedentes se conservan en reserva.
 
 La ventana disponible es de siete días. La selección favorece las fuentes con menos
 noticias publicadas; si una no tiene candidatas utilizables, sus turnos pasan a las
-demás. Dentro de una fuente se prioriza lo más reciente. Una noticia anterior a la
-más antigua de la parrilla puede entrar si mejora el reparto de fuentes. Si se conoce
+demás. Dentro de una fuente se prioriza lo más reciente, con la influencia editorial
+configurada. La parrilla se renueva por tiempo desde su incorporación. Si se conoce
 la fecha del artículo enlazado desde una red, se usa para evitar rejuvenecer artículos
 antiguos porque alguien vuelva a compartirlos. [Políticas y contadores](docs/BALANCING.md).
 
@@ -190,16 +190,17 @@ descarga de modelos y funcionamiento se describen en [PIPER.md](docs/PIPER.md).
 - `source_ids`: limita a identificadores de `news-radio/config/sources.json`.
   Vacío utiliza todas las fuentes de la plataforma seleccionada.
 - `language`: `all`, `es` o `en`; idioma de las fuentes, no de la locución.
-- `scan_interval_seconds`: 3600 por defecto, como mínimo una hora.
-- `new_stories_per_hour`: objetivo y máximo de incorporaciones a parrilla en una
-  ventana móvil de 60 minutos, actualmente **5**. Reparte el inicio de nuevas
-  producciones aproximadamente cada 12 minutos. Solo cuentan incorporaciones
-  reales; fallos, candidatas omitidas y repeticiones de emisión no gastan cupo.
-  Se relee sin reiniciar. Véase [ROTATION.md](docs/ROTATION.md).
+- `scan_interval_seconds`: uno de 43200 (12 horas), 21600 (6 horas), 3600
+  (hora en punto) o 1800 (en punto y a y media). Se elige en el panel de control.
+- `schedule_timezone`: zona del calendario; por defecto `Europe/Madrid`.
+- `new_stories_per_update`: máximo de incorporaciones por actualización, actualmente
+  **5**. Se producen seguidas, de una en una, y después se espera al siguiente horario.
+  El nombre anterior `new_stories_per_hour` se migra conservando su valor. Los ajustes
+  se aplican sin reiniciar. Véase [ROTATION.md](docs/ROTATION.md).
 - `max_age_hours`: antigüedad máxima de candidatas, actualmente 168 horas. Se
   prioriza lo más reciente de cada fuente dentro de esa ventana.
 - `balancing`: política modular de reparto. `strategy: "fair"` equilibra las
-  publicaciones acumuladas y las plazas de parrilla; `"latest"` selecciona por
+  publicaciones acumuladas al seleccionar candidatas; `"latest"` selecciona por
   actualidad global. `weights: {}` asigna el mismo peso a todas las fuentes.
   Los cambios se releen sin reiniciar. Véase [BALANCING.md](docs/BALANCING.md).
 - `max_playlist`: objetivo y máximo de noticias terminadas en parrilla, actualmente
@@ -486,3 +487,15 @@ Referencias: [segmentación HLS de FFmpeg](https://ffmpeg.org/ffmpeg-formats.htm
 [hls.js](https://github.com/video-dev/hls.js). El reproductor hls.js 1.7.3 está
 incluido en `web/vendor/`; su licencia Apache 2.0 se conserva junto al archivo. No depende
 de un CDN en ejecución.
+
+
+## Dashboard de control
+
+La interfaz de una pantalla incluye Directo, YouTube, Noticias, Parrilla, Búsqueda y fuentes, Voces y producción y Panel de control. Consulta [la guía del dashboard](docs/DASHBOARD.md) para la edición manual de parrilla, configuración y fuentes.
+
+### Valoración editorial opcional
+
+En **Búsqueda y fuentes → Relevancia IA** puedes activar observación, usar las
+valoraciones para seleccionar noticias o desactivar el módulo. Usa Gemma a través
+de `news-radio`, comparte el turno de IA con las locuciones y limita las evaluaciones
+por hora. Instalado inicialmente en observación. Consulta [la guía de relevancia](docs/RELEVANCE.md).

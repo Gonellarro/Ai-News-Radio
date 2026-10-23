@@ -47,17 +47,22 @@ También se expone en `GET /api/status`, campo `source_balance`.
 
 ## Parrilla y caducidad
 
-La parrilla utiliza plazas flexibles: reparte una por fuente disponible antes de
-dar plazas adicionales, según los pesos. Cuando faltan piezas en una fuente, otras
-ocupan los huecos. Conserva primero las noticias más recientes de cada fuente y
-usa el historial como desempate entre fuentes. Una fuente nueva puede desplazar
-una pieza de una fuente sobrerrepresentada aunque su noticia sea algo anterior.
+El balance y la valoración editorial eligen qué producir entre las candidatas;
+no comparan esas candidatas con las noticias ya emitidas para impedir su entrada.
+Si solo hay una fuente utilizable, puede ocupar toda la cola.
 
-Antes de gastar recursos en una candidata se comprueba si podría entrar. Se vuelve
-a comprobar cuando la extracción aporta la fecha real del artículo. Los candidatos
-sin hueco permanecen en reserva hasta caducar; no se redactan ni sintetizan por
-estar en esa reserva. Las piezas terminadas se mantienen hasta tener sustitutos.
-Si solo hay una fuente utilizable, puede ocupar toda la parrilla y toda la cola.
+Cada vídeo nuevo terminado entra en parrilla y sustituye al que lleve más tiempo
+en ella, salvo los fijados manualmente. `playlist_entered_at` guarda esa entrada:
+no es la fecha del artículo ni `updated_at`, y no cambia al actualizar su tarjeta.
+Las noticias anteriores conservan su entrada histórica durante la migración.
+Una incorporación manual desde fuera de la parrilla registra una nueva entrada.
+
+La renovación vive en `playlist_rotation.py`, independiente del balance y de la
+IA. Reducir la capacidad también retira primero las entradas más antiguas sin
+fijar. Si toda la parrilla está fijada, no hay hueco para producción nueva.
+La noticia que está sonando termina antes de que la limpieza elimine sus archivos.
+Las piezas actuales se mantienen hasta tener sustitutos terminados; nunca se vacía
+la parrilla por adelantado. Solo las candidatas seleccionadas se redactan y locutan.
 
 La migración puede recuperar candidatos que la regla anterior excluyó solo por
 ser más antiguos que el corte global: únicamente si siguen apareciendo en la
@@ -104,11 +109,11 @@ implementación proporciona:
 
 - `queue(candidates, published, running, active, limit, options)`: devuelve trabajos
   en orden de producción, hasta `limit`, considerando los turnos ya ocupados.
-- `playlist(jobs, published, limit, options)`: devuelve las piezas que conservar,
-  hasta `limit`.
 - `description`: texto que identifica la política en la web.
 
-Las funciones comunes `select`, `admits` y `keep` mantienen un contrato estable.
+`select` aplica esa política a la cola. `playlist_rotation.admits` y
+`playlist_rotation.keep` deciden capacidad y renovación sin consultar puntuaciones
+ni cuotas por fuente.
 La persistencia y las transacciones pertenecen a `store.py`; la producción utiliza
 ese contrato sin conocer la fórmula de puntuación. Cambiar el algoritmo no requiere
 modificar Ollama, TTS, el renderizador, la limpieza ni el emisor. Al añadir una clave

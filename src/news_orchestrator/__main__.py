@@ -5,12 +5,15 @@ import os
 from pathlib import Path
 import re
 import signal
+import sqlite3
 import threading
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 
 from news_orchestrator import config, piper_assets, visuals, youtube_control
 from news_orchestrator.pipeline import Pipeline
 from news_orchestrator.client import RemoteError
+from news_orchestrator.dashboard import Dashboard
+from news_orchestrator.playlist_control import Conflict
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -18,9 +21,15 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         try:
             if path == "/health":
-                self.json(200, {"status": "ok", "service": "news-orchestrator", "output": "local"})
+                workers = {thread.name: thread.is_alive() for thread in self.server.pipeline.threads}
+                healthy = bool(workers) and all(workers.values())
+                self.json(200 if healthy else 503,
+                          {"status": "ok" if healthy else "degraded", "service": "news-orchestrator",
+                           "output": "local", "workers": workers})
             elif path == "/api/status":
                 self.json(200, self.server.pipeline.status())
+            elif path.startswith("/api/dashboard/"):
+                self.json(200, self.server.dashboard.get(path.removeprefix("/api/dashboard/"), parse_qs(urlsplit(self.path).query)))
             elif path == "/api/youtube":
                 self.json(200, youtube_control.public_status())
             elif path == "/api/youtube/logs":
@@ -44,7 +53,8 @@ class Handler(BaseHTTPRequestHandler):
                 if (visuals.LOGOS / match[1]).is_symlink():
                     raise ValueError("Logo no válido.")
                 self.file(visuals.LOGOS / match[1], "image/png")
-            elif path in {"/", "/index.html", "/app.js", "/styles.css", "/youtube-guide.html", "/branding.html", "/branding.js", "/vendor/hls.light.min.js"}:
+            elif (path in {"/", "/index.html", "/app.js", "/styles.css", "/dashboard.css", "/youtube-guide.html", "/branding.html", "/branding.js", "/vendor/hls.light.min.js"}
+                  or re.fullmatch(r"/modules/[a-z-]+\.js", path)):
                 name = "index.html" if path == "/" else path[1:]
                 media = "text/javascript" if name.endswith(".js") else "text/css" if name.endswith(".css") else "text/html"
                 self.file(config.WEB / name, media + "; charset=utf-8")
@@ -57,6 +67,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.file(config.DATA / "media" / match[1] / match[2], media)
             else:
                 self.json(404, {"error": "Ruta no encontrada."})
+        except sqlite3.OperationalError:
+            logging.exception("Dashboard database operation failed")
+            self.json(503, {"error": "La base de datos está ocupada temporalmente. Vuelve a intentarlo en unos segundos."})
         except (ValueError, OSError, RemoteError) as exc:
             self.json(503, {"error": str(exc)})
 
@@ -70,15 +83,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if self.headers.get("Transfer-Encoding") or not 1 <= length <= 4096:
+            path = urlsplit(self.path).path
+            maximum = 17 * 1024 * 1024 if path.startswith("/api/dashboard/voices/") else 256 * 1024
+            if self.headers.get("Transfer-Encoding") or not 1 <= length <= maximum:
                 raise ValueError("Cuerpo de petición no válido.")
             value = json.loads(self.rfile.read(length))
             if not isinstance(value, dict):
                 raise ValueError("Se requiere un objeto JSON.")
             path = urlsplit(self.path).path
-            if path == "/api/scan":
-                self.server.pipeline.requested.set()
-                self.json(202, {"status": "scheduled"})
+            if path.startswith("/api/dashboard/"):
+                self.json(200, self.server.dashboard.post(path.removeprefix("/api/dashboard/"), value))
+            elif path == "/api/scan":
+                if not self.server.pipeline.scanning:
+                    self.server.pipeline.manual_requested.set()
+                self.json(202, {"status": "in_progress" if self.server.pipeline.scanning else "scheduled"})
             elif path == "/api/narration":
                 if value.get("tts_engine") == "qwen" and value.get("voice_mode") == "fixed":
                     voices = self.server.pipeline.tts.request("/api/voices", timeout=5)["voices"]
@@ -93,10 +111,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.json(202, youtube_control.start())
             elif path == "/api/youtube/stop":
                 self.json(202, youtube_control.stop())
+            elif path == "/api/youtube/reconnect":
+                self.json(202, youtube_control.reconnect())
             else:
                 self.json(404, {"error": "Ruta no encontrada."})
+        except Conflict as exc:
+            self.json(409, {"error": str(exc)})
         except (ValueError, UnicodeError) as exc:
             self.json(400, {"error": str(exc)})
+        except sqlite3.OperationalError:
+            logging.exception("Dashboard database write failed")
+            self.json(503, {"error": "La base de datos está ocupada temporalmente. Recarga los valores antes de volver a guardar."})
         except OSError:
             self.json(503, {"error": "No se pudo guardar la configuración. Comprueba los permisos de la carpeta correspondiente."})
         except RemoteError as exc:
@@ -170,6 +195,7 @@ def main():
     pipeline = Pipeline()
     server = ThreadingHTTPServer(("0.0.0.0", 8792), Handler)
     server.pipeline = pipeline
+    server.dashboard = Dashboard(pipeline)
     def shutdown(*_):
         pipeline.stop.set()
         threading.Thread(target=server.shutdown, daemon=True).start()

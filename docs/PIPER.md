@@ -60,9 +60,9 @@ eliminando aunque Qwen esté apagado. La purga pendiente de sus copias remotas
 se conserva para cuando vuelva a estar disponible; no bloquea las noticias Piper.
 `/api/status` informa del número en `qwen_cleanup_pending`.
 
-El motor reduce el coste de la voz. El ritmo y las pausas se controlan por
-`new_stories_per_hour`, independientemente del motor: actualmente cinco
-incorporaciones por ventana móvil de sesenta minutos. Véase [ROTATION.md](ROTATION.md).
+El motor reduce el coste de la voz. El calendario `scan_interval_seconds` y el
+tamaño `new_stories_per_update` controlan los lotes, independientemente del motor:
+actualmente cinco noticias seguidas en cada actualización horaria. Véase [ROTATION.md](ROTATION.md).
 
 ## Voz Davefx instalada
 

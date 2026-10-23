@@ -23,7 +23,7 @@ class Broadcast:
         fcntl.flock(self.instance, fcntl.LOCK_EX | fcntl.LOCK_NB)
         self.store = Store(config.DATA)
         self.stop = threading.Event()
-        self.last_id = None
+        self.last_id = self.store.state("playing_id")
         self.next_tick = None
         try:
             state = json.loads((self.live / "state.json").read_text())
@@ -78,12 +78,28 @@ class Broadcast:
 
     def run(self):
         order = deque()
+        last_order = None
         while not self.stop.is_set():
             try:
                 with lifetime.locked():
                     settings = config.load()
                     playlist = self.store.playlist()
                     active = {job["id"]: job for job in playlist if (config.DATA / "media" / job["id"] / "video.mp4").is_file()}
+                    desired = tuple(active)
+                    if desired != last_order:
+                        order = deque(desired)
+                        if self.last_id in order:
+                            order.rotate(-list(order).index(self.last_id)-1)
+                        last_order = desired
+                    with self.store.connect() as db:
+                        db.execute("BEGIN IMMEDIATE")
+                        from news_orchestrator.playlist_control import state, put
+                        next_id = state(db, "next_play_id")
+                        if next_id:
+                            put(db, "next_play_id", None)
+                            if next_id in active:
+                                order = deque(i for i in order if i != next_id)
+                                order.appendleft(next_id)
                     if not order:
                         order.extend(active)
                     while order and order[0] not in active:

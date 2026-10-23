@@ -129,6 +129,15 @@ def stop():
     return public_status()
 
 
+def reconnect():
+    with locked():
+        settings = load()
+        if not settings["enabled"]:
+            raise ValueError("Inicia primero el envío a YouTube.")
+        save(settings)  # Revision change asks the worker to reconnect once.
+    return public_status()
+
+
 def logs():
     try:
         with (DIRECTORY / "relay.log").open("rb") as handle:

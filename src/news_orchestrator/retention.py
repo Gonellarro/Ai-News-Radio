@@ -84,5 +84,5 @@ def run(store, tts, media_lock, stop):
             return
         except Exception as exc:
             logging.exception("Retired news cleanup failed")
-            store.set_state("cleanup_error", str(exc)[:1500])
+            store.report_error("cleanup_error", exc)
         stop.wait(30)

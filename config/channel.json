@@ -7,20 +7,28 @@
   "source_ids": [],
   "language": "all",
   "scan_interval_seconds": 3600,
-  "new_stories_per_hour": 5,
   "max_age_hours": 168,
   "max_playlist": 20,
   "max_pending": 10,
   "balancing": {
     "strategy": "fair",
-    "weights": {}
+    "weights": {
+      "xataka-ai": 2,
+      "techcrunch-ai": 2,
+      "reddit-localllama": 2,
+      "the-verge-ai": 2,
+      "google-ai": 2,
+      "deepmind-blog": 2
+    }
   },
   "voice_name": "cristina",
   "tts_engine": "qwen",
   "piper_voice": "es_ES-davefx-medium",
   "voice_mode": "random",
   "voice_names": [],
-  "voice_exclude": ["qwen-demo-en"],
+  "voice_exclude": [
+    "qwen-demo-en"
+  ],
   "tts_language": "Spanish",
   "audio_intro_seconds": 1.0,
   "audio_outro_seconds": 2.0,
@@ -28,5 +36,21 @@
   "voice_normalization_enabled": true,
   "voice_loudness_lufs": -16.0,
   "voice_true_peak_dbtp": -2.0,
-  "voice_loudness_range_lu": 7.0
+  "voice_loudness_range_lu": 7.0,
+  "qwen_voice_id": "",
+  "relevance": {
+    "mode": "rank",
+    "max_evaluations_per_hour": 20,
+    "interval_seconds": 3600,
+    "influence": 0.6,
+    "weights": {
+      "relevance": 0.4,
+      "impact": 0.25,
+      "novelty": 0.2,
+      "substance": 0.15
+    },
+    "criteria": "Prioriza información concreta y útil sobre inteligencia artificial: lanzamientos disponibles,\ninvestigación con aportaciones claras, herramientas, aplicaciones, modelos abiertos y cambios que afecten a sus usuarios.\nValora la novedad del hecho descrito y su alcance. Penaliza publicidad, descuentos, titulares vacíos,\nrepeticiones sin aportación y especulación presentada como hecho. Una opinión puede ser útil si aporta\nanálisis sustancial. No equipares popularidad, nombre de una empresa o fuente oficial con relevancia.\nPuntúa únicamente lo que permiten inferir el titular y el extracto; señala cuando falta información.\nNo verifiques hechos ni certifiques credibilidad: no tienes acceso al artículo completo ni a otras fuentes."
+  },
+  "new_stories_per_update": 5,
+  "schedule_timezone": "Europe/Madrid"
 }

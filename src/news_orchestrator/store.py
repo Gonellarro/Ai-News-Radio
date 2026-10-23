@@ -2,13 +2,15 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import logging
 from pathlib import Path
 import re
 import sqlite3
 import unicodedata
+import uuid
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from news_orchestrator import balancing, narration, rotation
+from news_orchestrator import balancing, narration, playlist_rotation, rotation
 
 MAX_RETRIES = 3  # One initial attempt, followed by at most three retries.
 
@@ -77,6 +79,11 @@ class Store:
                     db.execute(f"ALTER TABLE jobs ADD COLUMN {name} TEXT")
             if "queue_rank" not in columns:
                 db.execute("ALTER TABLE jobs ADD COLUMN queue_rank INTEGER")
+            for name in ("pinned", "manual_excluded", "requested"):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE jobs ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0")
+            if "relevance" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN relevance TEXT NOT NULL DEFAULT '{}'")
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS unique_content ON jobs(content_key) WHERE content_key IS NOT NULL")
             db.execute("""CREATE TABLE IF NOT EXISTS source_publications (
                 job_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, source_name TEXT NOT NULL,
@@ -84,12 +91,30 @@ class Store:
             )""")
             db.execute("CREATE INDEX IF NOT EXISTS publications_by_source ON source_publications(source_id)")
             db.execute("CREATE INDEX IF NOT EXISTS publications_by_time ON source_publications(recorded_at)")
+            db.execute("""CREATE TABLE IF NOT EXISTS production_cycles (
+                id TEXT PRIMARY KEY, started_at TEXT NOT NULL, scheduled_for TEXT,
+                origin TEXT NOT NULL, quota INTEGER NOT NULL, status TEXT NOT NULL,
+                finished_at TEXT, error TEXT NOT NULL DEFAULT '', retry_at TEXT NOT NULL DEFAULT ''
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS cycle_publications (
+                job_id TEXT PRIMARY KEY, cycle_id TEXT NOT NULL, recorded_at TEXT NOT NULL
+            )""")
+            db.execute("CREATE INDEX IF NOT EXISTS cycle_publications_cycle ON cycle_publications(cycle_id)")
+            if "retry_at" not in {row["name"] for row in db.execute("PRAGMA table_info(production_cycles)")}:
+                db.execute("ALTER TABLE production_cycles ADD COLUMN retry_at TEXT NOT NULL DEFAULT ''")
             # Backfill once, including retired clips whose media was removed.
             # Each clip counts once, never once per loop, retry or visual update.
             if not db.execute("SELECT 1 FROM state WHERE key='source_history_initialized_at'").fetchone():
                 for row in db.execute("SELECT * FROM jobs WHERE status='ready'").fetchall():
                     self._record_publication(db, self.decode(row), row["updated_at"])
                 db.execute("INSERT INTO state VALUES ('source_history_initialized_at',?)", (json.dumps(now()),))
+            if "playlist_entered_at" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN playlist_entered_at TEXT")
+                # Historical admission times are stable even when a card or
+                # voice presentation has subsequently changed updated_at.
+                db.execute("""UPDATE jobs SET playlist_entered_at=COALESCE(
+                    (SELECT recorded_at FROM source_publications WHERE job_id=jobs.id),updated_at)
+                    WHERE active=1""")
 
     @contextmanager
     def connect(self):
@@ -134,6 +159,13 @@ class Store:
             db.execute("INSERT INTO state VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                        (key, json.dumps(value, ensure_ascii=False)))
 
+    def report_error(self, key, error):
+        """A temporary write failure must not kill a background worker."""
+        try:
+            self.set_state(key, str(error)[:1500])
+        except sqlite3.Error:
+            logging.exception("Could not persist background error: %s", key)
+
     def event(self, message, job_id=None):
         with self.connect() as db:
             db.execute("INSERT INTO events(created_at,job_id,message) VALUES (?,?,?)", (now(), job_id, message))
@@ -148,7 +180,7 @@ class Store:
         if row is None:
             return None
         value = dict(row)
-        for key in ["article", "work", "result"]:
+        for key in ["article", "work", "result", "relevance"]:
             value[key] = json.loads(value[key]) if value[key] else None
         return value
 
@@ -165,7 +197,8 @@ class Store:
 
     def playlist(self):
         with self.connect() as db:
-            return [self.decode(row) for row in db.execute("SELECT * FROM jobs WHERE active=1 AND status='ready' ORDER BY published_at DESC,id")]
+            from news_orchestrator.playlist_control import ordered
+            return ordered(db)
 
     def inventory(self):
         with self.connect() as db:
@@ -218,17 +251,45 @@ class Store:
     def admits(self, job, settings):
         with self.connect() as db:
             db.execute("BEGIN")
-            return balancing.admits(job, self._active(db), self._published_counts(db), settings)
+            return playlist_rotation.admits(job, self._active(db), settings["max_playlist"])
 
     @staticmethod
     def _rotation(db, settings):
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-        publications = [row[0] for row in db.execute(
-            "SELECT recorded_at FROM source_publications WHERE recorded_at>? ORDER BY recorded_at", (cutoff,))]
-        last = db.execute("""SELECT p.recorded_at,j.work FROM source_publications p
-            JOIN jobs j ON j.id=p.job_id ORDER BY p.recorded_at DESC,p.job_id DESC LIMIT 1""").fetchone()
-        started = (json.loads(last["work"]).get("production_started_at") or last["recorded_at"]) if last else None
-        return rotation.plan(settings["new_stories_per_hour"], publications, started)
+        recent = db.execute("SELECT COUNT(*) FROM source_publications WHERE recorded_at>?", (cutoff,)).fetchone()[0]
+        cycle = Store._cycle(db)
+        published = db.execute("SELECT COUNT(*) FROM cycle_publications WHERE cycle_id=?", (cycle["id"],)).fetchone()[0] if cycle else 0
+        deadline = db.execute("SELECT value FROM state WHERE key='next_scan_at'").fetchone()
+        return rotation.plan(cycle, published, recent, json.loads(deadline[0]) if deadline else None,
+                             default_quota=settings["new_stories_per_update"])
+
+    @staticmethod
+    def _cycle(db):
+        row = db.execute("SELECT value FROM state WHERE key='production_cycle_id'").fetchone()
+        cycle = db.execute("SELECT * FROM production_cycles WHERE id=?", (json.loads(row[0]),)).fetchone() if row else None
+        return dict(cycle) if cycle else None
+
+    def cycle(self):
+        with self.connect() as db:
+            return self._cycle(db)
+
+    def start_cycle(self, settings, origin, scheduled_for=None):
+        """Replace unstarted work from older updates; preserve running jobs."""
+        cycle_id = uuid.uuid4().hex
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("UPDATE production_cycles SET status='replaced',finished_at=? WHERE status IN ('collecting','ready','producing')", (now(),))
+            db.execute("INSERT INTO production_cycles(id,started_at,scheduled_for,origin,quota,status) VALUES (?,?,?,?,?,'collecting')",
+                       (cycle_id, now(), scheduled_for, origin, settings["new_stories_per_update"]))
+            db.execute("INSERT INTO state VALUES ('production_cycle_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(cycle_id),))
+        return cycle_id
+
+    def finish_collection(self, cycle_id, settings, error=""):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("UPDATE production_cycles SET status=?,error=? WHERE id=? AND status='collecting'",
+                       ("error" if error else "ready", error[:1500], cycle_id))
+            self._trim(db, settings)
 
     def rotation(self, settings):
         with self.connect() as db:
@@ -252,7 +313,7 @@ class Store:
                     db.execute("""UPDATE jobs SET status='waiting',stage='waiting',retry_at=?,updated_at=?,
                         artifacts_deleted_at=NULL,tts_deleted_at=NULL,queue_rank=NULL
                         WHERE id=? AND status='superseded' AND active=0 AND result IS NULL
-                        AND work='{}' AND failures=0 AND error=''""", (now(), now(), event_key(article)))
+                        AND work='{}' AND failures=0 AND error='' AND manual_excluded=0""", (now(), now(), event_key(article)))
             self._trim(db, settings)
         return inserted
 
@@ -262,7 +323,7 @@ class Store:
         published = Store._published_counts(db)
         active = Store._active(db)
         if len(active) > settings["max_playlist"]:
-            keep = {job["id"] for job in balancing.keep(active, published, settings)}
+            keep = {job["id"] for job in playlist_rotation.keep(active, settings["max_playlist"])}
             for job in active:
                 if job["id"] not in keep:
                     db.execute("UPDATE jobs SET active=0 WHERE id=?", (job["id"],))
@@ -272,7 +333,7 @@ class Store:
         running = [Store.decode(row) for row in db.execute("SELECT * FROM jobs WHERE status='running'")]
         slots = max(0, settings["max_pending"] - len(running))
         candidates = [Store.decode(row) for row in db.execute("""SELECT * FROM jobs
-            WHERE status IN ('queued','waiting','retry') AND retry_at<=?""", (now(),))]
+            WHERE status IN ('queued','waiting','retry') AND manual_excluded=0 AND retry_at<=?""", (now(),))]
         # Voice work already started in another backend waits for that engine
         # to be selected again. It must not hold up the currently enabled one.
         candidates = [job for job in candidates if narration.engine(job["work"], settings) == settings["tts_engine"]]
@@ -282,18 +343,40 @@ class Store:
         for rank, job in enumerate(pending):
             status = "retry" if job["status"] == "retry" else "queued"
             db.execute("UPDATE jobs SET status=?,queue_rank=? WHERE id=?", (status, rank, job["id"]))
+        if pending:
+            db.execute("""UPDATE production_cycles SET retry_at='' WHERE retry_at!=''
+                AND id=(SELECT json_extract(value,'$') FROM state WHERE key='production_cycle_id')""")
 
     def claim(self, settings):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._trim(db, settings)
-            if not self._rotation(db, settings)["can_start"]:
+            allowance = self._rotation(db, settings)
+            if not allowance["can_start"]:
                 return None
             row = db.execute("""SELECT * FROM jobs WHERE status IN ('queued','retry') AND retry_at<=?
                 AND queue_rank IS NOT NULL ORDER BY queue_rank,id LIMIT 1""", (now(),)).fetchone()
             if row:
-                db.execute("UPDATE jobs SET status='running',updated_at=? WHERE id=?", (now(), row["id"]))
-            return self.decode(row)
+                job = self.decode(row)
+                job["work"]["production_cycle_id"] = allowance["cycle_id"]
+                db.execute("UPDATE jobs SET status='running',work=?,updated_at=? WHERE id=?",
+                           (json.dumps(job["work"], ensure_ascii=False), now(), job["id"]))
+                db.execute("UPDATE production_cycles SET status='producing' WHERE id=? AND status='ready'", (allowance["cycle_id"],))
+                return job
+            # End an empty batch, or sleep until an actual retry is due, rather
+            # than polling Qwen and rescanning all candidates every two seconds.
+            active = self._active(db)
+            future = [self.decode(item) for item in db.execute("""SELECT * FROM jobs
+                WHERE status='retry' AND manual_excluded=0 AND retry_at>? AND published_at>=?""",
+                (now(), (datetime.now(timezone.utc)-timedelta(hours=settings['max_age_hours'])).isoformat()))]
+            future = [item for item in future if narration.engine(item['work'], settings) == settings['tts_engine']
+                      and (balancing.resumable(item) or playlist_rotation.admits(item, active, settings["max_playlist"]))]
+            if future:
+                db.execute("UPDATE production_cycles SET retry_at=? WHERE id=?",
+                           (min(item['retry_at'] for item in future), allowance['cycle_id']))
+            else:
+                db.execute("UPDATE production_cycles SET status='exhausted',finished_at=? WHERE id=?", (now(), allowance['cycle_id']))
+            return None
 
     def skip(self, job_id, reason):
         with self.connect() as db:
@@ -332,19 +415,25 @@ class Store:
             job = self.decode(db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
             if not job or job["status"] != "running":
                 raise RuntimeError("El trabajo no está en producción; no se publica ni se vuelve a contabilizar.")
-            published = self._published_counts(db)
-            source_id = balancing.source(job)["id"]
-            published[source_id] = published.get(source_id, 0) + 1
+            timestamp = now()
+            job["playlist_entered_at"] = timestamp
             active = [item for item in self._active(db) if item["id"] != job_id]
-            keep = {item["id"] for item in balancing.keep(active + [job], published, settings)}
+            keep = {item["id"] for item in playlist_rotation.keep(active + [job], settings["max_playlist"])}
             admitted = job_id in keep
-            db.execute("UPDATE jobs SET status='ready',stage='ready',active=?,result=?,error='',updated_at=?,queue_rank=NULL,artifacts_deleted_at=NULL,tts_deleted_at=NULL WHERE id=?",
-                       (int(admitted), json.dumps(result, ensure_ascii=False), now(), job_id))
+            db.execute("UPDATE jobs SET status='ready',stage='ready',active=?,result=?,error='',updated_at=?,playlist_entered_at=?,queue_rank=NULL,requested=0,artifacts_deleted_at=NULL,tts_deleted_at=NULL WHERE id=?",
+                       (int(admitted), json.dumps(result, ensure_ascii=False), timestamp, timestamp if admitted else None, job_id))
             if admitted:
-                self._record_publication(db, job, now())
+                self._record_publication(db, job, timestamp)
+                cycle_id = job["work"].get("production_cycle_id")
+                if cycle_id:
+                    db.execute("INSERT OR IGNORE INTO cycle_publications VALUES (?,?,?)", (job_id, cycle_id, now()))
+                    db.execute("""UPDATE production_cycles SET status='completed',finished_at=? WHERE id=?
+                        AND status IN ('ready','producing') AND quota<=(SELECT COUNT(*) FROM cycle_publications WHERE cycle_id=?)""", (now(), cycle_id, cycle_id))
             for previous in active:
                 if previous["id"] not in keep:
                     db.execute("UPDATE jobs SET active=0 WHERE id=?", (previous["id"],))
+                    db.execute("INSERT INTO events(created_at,job_id,message) VALUES (?,?,?)",
+                               (timestamp, previous["id"], "Renovación automática: se retira la noticia que llevaba más tiempo en parrilla. Sus archivos se borrarán al terminar su emisión."))
             self._trim(db, settings)
             return admitted
 
