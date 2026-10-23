@@ -88,13 +88,17 @@ class Service:
         language = data.get("language", "Spanish")
         if language not in LANGUAGES:
             raise ValueError("El idioma seleccionado no está disponible.")
-        voice = self.voices.get(data.get("voice_id"))
-        request = {"text": text.strip(), "language": language, "voice": voice, "seed": 42}
-        with self.control:
+        # Library changes and the job's independent reference snapshot are atomic
+        # with respect to each other. Workers never read from the live library.
+        with self.control, self.voices.lock:
             if request_key:
                 existing = self.store.by_request_key(request_key)
                 if existing:
                     return self.job(existing["id"])
+            voice = self.voices.get(data.get("voice_id"))
+            if not voice["enabled"]:
+                raise ValueError("Esta voz está desactivada. Actívala antes de generar una locución.")
+            request = {"text": text.strip(), "language": language, "voice": voice, "seed": 42}
             job = self.store.create(request, request_key=request_key)
             try:
                 directory = self.directory(job["id"])
@@ -193,7 +197,7 @@ class Service:
 
     @staticmethod
     def unload_ollama():
-        url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+        url = os.environ.get("OLLAMA_URL", "http://ollama:11434").rstrip("/")
         try:
             with urlopen(url + "/api/ps", timeout=8) as response:
                 models = json.load(response).get("models", [])

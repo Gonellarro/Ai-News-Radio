@@ -19,9 +19,10 @@ def source_is_ready(source: dict) -> bool:
     return bool(source.get("feed_url"))
 
 
-def load_sources() -> list[dict]:
+def load_sources(data=None) -> list[dict]:
     root = Path(os.environ.get("NEWS_RADIO_CONFIG_DIR", Path(__file__).resolve().parents[2] / "config"))
-    data = json.loads((root / "sources.json").read_text(encoding="utf-8"))
+    if data is None:
+        data = json.loads((root / "sources.json").read_text(encoding="utf-8"))
     sources = data.get("sources") if isinstance(data, dict) else None
     if not isinstance(sources, list):
         raise ValueError("sources.json debe contener una lista sources.")
@@ -38,9 +39,9 @@ def load_sources() -> list[dict]:
         if not isinstance(source.get("enabled"), bool):
             raise ValueError(f"enabled debe ser true o false: {source['id']}")
         connector = source.get("connector", "rss")
-        if connector not in {"rss", "bluesky_author", "bluesky_feed", "searxng", "newsroom"}:
+        if not isinstance(connector, str) or connector not in {"rss", "bluesky_author", "bluesky_feed", "searxng", "newsroom"}:
             raise ValueError(f"Conector no admitido: {source['id']}")
-        if source.get("platform", "web") not in {"web", "reddit", "mastodon", "bluesky"}:
+        if not isinstance(source.get("platform", "web"), str) or source.get("platform", "web") not in {"web", "reddit", "mastodon", "bluesky"}:
             raise ValueError(f"Plataforma no admitida: {source['id']}")
         if connector == "bluesky_author" and not isinstance(source.get("actor"), str):
             raise ValueError(f"Falta actor de Bluesky: {source['id']}")
@@ -56,9 +57,9 @@ def load_sources() -> list[dict]:
             if (not isinstance(queries, list) or not 1 <= len(queries) <= 4
                     or any(not isinstance(q, str) or not 1 <= len(q.strip()) <= 300 for q in queries)):
                 raise ValueError(f"queries debe contener entre una y cuatro búsquedas: {source['id']}")
-            if source.get("category", "news") not in {"news", "general"}:
+            if not isinstance(source.get("category", "news"), str) or source.get("category", "news") not in {"news", "general"}:
                 raise ValueError(f"Categoría de SearXNG no válida: {source['id']}")
-            if source.get("time_range", "week") not in {"day", "week", "month"}:
+            if not isinstance(source.get("time_range", "week"), str) or source.get("time_range", "week") not in {"day", "week", "month"}:
                 raise ValueError(f"Periodo de SearXNG no válido: {source['id']}")
         if connector == "bluesky_feed" and (
             not isinstance(source.get("feed"), str)

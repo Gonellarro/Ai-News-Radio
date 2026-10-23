@@ -8,7 +8,7 @@ import time
 
 
 @contextmanager
-def inference_slot():
+def inference_slot(wait_seconds=1800):
     filename = os.environ.get("AI_RUNTIME_LOCK")
     if not filename:
         yield
@@ -16,7 +16,7 @@ def inference_slot():
     path = Path(filename)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+") as lock:
-        deadline = time.monotonic() + 1800
+        deadline = time.monotonic() + wait_seconds
         while True:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

@@ -40,7 +40,8 @@ class Handler(BaseHTTPRequestHandler):
                     extension = match[2]
                     self.file(service.directory(match[1]) / f"output.{extension}", "audio/mpeg" if extension == "mp3" else "audio/wav")
             elif match := re.fullmatch(r"/api/voices/([a-f0-9]{32})/audio", path):
-                self.file(Path(service.voices.get(match[1])["reference"]), "audio/wav")
+                with service.voices.lock:
+                    self.file(Path(service.voices.get(match[1])["reference"]), "audio/wav")
             elif path in {"/", "/index.html", "/app.js", "/styles.css"}:
                 filename = "index.html" if path == "/" else path[1:]
                 media = {"index.html": "text/html", "app.js": "text/javascript", "styles.css": "text/css"}[filename]
@@ -76,7 +77,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/voices":
                 self.json(201, service.voices.upload(data))
             elif path == "/api/voices/import":
-                self.json(200, service.voices.import_folder())
+                self.json(200, service.voices.import_folder(data.get("restore_deleted", False)))
+            elif match := re.fullmatch(r"/api/voices/([a-f0-9]{32})/update", path):
+                self.json(200, service.voices.update(match[1], data))
+            elif match := re.fullmatch(r"/api/voices/([a-f0-9]{32})/delete", path):
+                self.json(200, service.voices.delete(match[1]))
             elif path == "/api/jobs":
                 self.json(202, service.enqueue(data))
             elif path == "/api/jobs/purge-news":

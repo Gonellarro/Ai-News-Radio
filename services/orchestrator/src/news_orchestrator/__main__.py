@@ -45,7 +45,11 @@ class Handler(BaseHTTPRequestHandler):
                                 "piper_voices": piper_assets.public_catalogue()})
             elif path == "/api/voices":
                 settings = config.load()
-                data = self.server.pipeline.tts.request("/api/voices", timeout=5)
+                try:
+                    data = {**self.server.pipeline.tts.request("/api/voices", timeout=5), "available": True}
+                except (OSError, RemoteError):
+                    data = {"voices": [], "available": False,
+                            "notice": "Qwen no está disponible. Activa su perfil de Docker para gestionar voces clonadas. Piper funciona sin ese servicio."}
                 self.json(200, {**data, "voice_names": settings["voice_names"], "voice_exclude": settings["voice_exclude"]})
             elif path == "/samples/piper-davefx.mp3":
                 self.file(config.DATA / "previews" / "piper-davefx.mp3", "audio/mpeg")

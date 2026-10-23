@@ -16,7 +16,7 @@ class OllamaError(Exception):
 
 class OllamaClient:
     def __init__(self):
-        self.url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+        self.url = os.environ.get("OLLAMA_URL", "http://ollama:11434").rstrip("/")
         self.model = os.environ.get("OLLAMA_MODEL", DEFAULT_MODEL)
         self.timeout = max(30, int(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "300")))
         parsed = urlsplit(self.url)

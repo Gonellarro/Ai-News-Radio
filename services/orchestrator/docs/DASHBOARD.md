@@ -2,7 +2,7 @@
 
 ## Uso
 
-Abre http://192.168.1.62:8792 y recarga con Ctrl+F5 si conservas una pestaña del panel anterior.
+Abre http://localhost:8792 y recarga con Ctrl+F5 si conservas una pestaña del panel anterior.
 La página ocupa la ventana. Los listados se paginan; los textos completos, formularios de fuentes y previsualizaciones se abren en un diálogo con su propio espacio de lectura.
 
 - **Inicio · Directo:** reproductor local persistente, siguientes noticias, revisión manual y pausa de automatización. Pausar no detiene una locución ya iniciada ni la emisión. La revisión manual también se puede solicitar con la automatización pausada.

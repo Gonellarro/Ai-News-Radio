@@ -9,10 +9,12 @@ import re
 
 from news_radio.search import SearchError, search_news
 from news_radio.catalog import load_sources
+from news_radio import source_control
 from news_radio.collector import NewsCollector
 from news_radio.library import NewsLibrary
 from news_radio.editorial import EditorialError, EditorialService
 from news_radio.ollama import OllamaError
+from news_radio import relevance
 
 
 WEB_DIR = Path(os.environ.get("WEB_DIR", Path(__file__).resolve().parents[2] / "web"))
@@ -27,6 +29,11 @@ class NewsHandler(BaseHTTPRequestHandler):
             self._search(parse_qs(parsed.query, keep_blank_values=True))
         elif parsed.path == "/api/news":
             self._news(parse_qs(parsed.query, keep_blank_values=True))
+        elif parsed.path == "/api/sources/config":
+            try:
+                self._json(200, source_control.snapshot())
+            except (ValueError, OSError) as exc:
+                self._json(503, {"error": str(exc)})
         elif parsed.path == "/api/sources":
             try:
                 self._json(200, self.server.collector.status())
@@ -54,7 +61,17 @@ class NewsHandler(BaseHTTPRequestHandler):
             self._json(415, {"error": "Se requiere Content-Type: application/json."})
             return
         path = urlparse(self.path).path
-        if path == "/api/refresh":
+        if path == "/api/sources/config":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if self.headers.get("Transfer-Encoding") or not 1 <= length <= 256 * 1024:
+                    raise ValueError("Tamaño de catálogo no válido.")
+                self._json(200, source_control.update(json.loads(self.rfile.read(length))))
+            except (ValueError, UnicodeError) as exc:
+                self._json(400, {"error": str(exc)})
+            except OSError:
+                self._json(503, {"error": "No se pudo guardar el catálogo de fuentes."})
+        elif path == "/api/refresh":
             if not self.server.collector.refreshing:
                 self.server.collector.request_refresh()
             self._json(202, {"status": "refreshing"})
@@ -100,7 +117,9 @@ class NewsHandler(BaseHTTPRequestHandler):
                 raise EditorialError("El cuerpo de la petición no es JSON válido.") from exc
             if not isinstance(data, dict):
                 raise EditorialError("La petición debe contener un objeto JSON.")
-            if path in {"/api/editorial/prepare", "/api/editorial/generate"}:
+            if path == "/api/editorial/relevance":
+                self._json(200, relevance.evaluate(service.client, data))
+            elif path in {"/api/editorial/prepare", "/api/editorial/generate"}:
                 article_id = data.get("article_id")
                 if not isinstance(article_id, str) or not re.fullmatch(r"[a-f0-9]{64}", article_id):
                     raise EditorialError("Selecciona una noticia de la biblioteca local.")
@@ -114,7 +133,9 @@ class NewsHandler(BaseHTTPRequestHandler):
                 self._json(404, {"error": "Ruta editorial no encontrada."})
         except EditorialError as exc:
             self._json(exc.status, {"error": str(exc)})
-        except (OSError, ValueError) as exc:
+        except relevance.RelevanceBusy as exc:
+            self._json(409, {"error": str(exc)})
+        except (OSError, ValueError, OllamaError) as exc:
             self._json(503, {"error": str(exc)})
 
     def _news(self, params: dict[str, list[str]]) -> None:

@@ -4,36 +4,48 @@
     {
       "id": "searxng-ai-news",
       "name": "SearXNG · Noticias de IA",
-      "url": "http://192.168.1.9:8888",
+      "url": "https://search.example.invalid",
       "feed_url": null,
       "connector": "searxng",
       "category": "news",
-      "queries": ["artificial intelligence news"],
+      "queries": [
+        "artificial intelligence news"
+      ],
       "time_range": "week",
       "platform": "web",
       "type": "search_discovery",
       "language": "all",
-      "topics": ["products", "research", "society"],
-      "enabled": true,
+      "topics": [
+        "products",
+        "research",
+        "society"
+      ],
+      "enabled": false,
       "refresh_seconds": 3600,
-      "notes": "Descubrimiento complementario. Solo incorpora resultados fechados. Los errores de motores no detienen las fuentes directas."
+      "notes": "Opcional. Configura SEARXNG_URL en .env y activa esta fuente desde el dashboard."
     },
     {
       "id": "searxng-ai-general",
       "name": "SearXNG · Búsqueda general de IA",
-      "url": "http://192.168.1.9:8888",
+      "url": "https://search.example.invalid",
       "feed_url": null,
       "connector": "searxng",
       "category": "general",
-      "queries": ["inteligencia artificial novedades modelos"],
+      "queries": [
+        "inteligencia artificial novedades modelos"
+      ],
       "time_range": "week",
       "platform": "web",
       "type": "search_discovery",
       "language": "all",
-      "topics": ["products", "research", "society"],
-      "enabled": true,
+      "topics": [
+        "products",
+        "research",
+        "society"
+      ],
+      "enabled": false,
       "refresh_seconds": 3600,
-      "notes": "Motores configurados en la instancia SearXNG. Las fechas ausentes se buscan en metadatos de un máximo de cuatro páginas por ciclo y se cachean."
+      "notes": "Opcional. Configura SEARXNG_URL en .env y activa esta fuente desde el dashboard."
     },
     {
       "id": "openai-news",
@@ -206,7 +218,12 @@
       "feed_url": "https://blogs.nvidia.com/blog/category/generative-ai/feed/",
       "type": "primary",
       "language": "en",
-      "topics": ["products", "research", "open_source", "infrastructure"],
+      "topics": [
+        "products",
+        "research",
+        "open_source",
+        "infrastructure"
+      ],
       "enabled": true,
       "refresh_seconds": 3600,
       "notes": "RSS oficial de la categoría de IA, comprobado el 18/10/2026. Comunicaciones de la empresa; atribuir sus anuncios como tales."
@@ -219,10 +236,26 @@
       "feed_url": "https://www.microsoft.com/en-us/research/feed/",
       "type": "primary",
       "language": "en",
-      "topics": ["research", "models", "agents"],
+      "topics": [
+        "research",
+        "models",
+        "agents"
+      ],
       "enabled": true,
       "refresh_seconds": 3600,
-      "keywords": ["AI", "artificial intelligence", "machine learning", "language model", "language models", "LLM", "neural", "agent", "agents", "Copilot", "reinforcement learning"],
+      "keywords": [
+        "AI",
+        "artificial intelligence",
+        "machine learning",
+        "language model",
+        "language models",
+        "LLM",
+        "neural",
+        "agent",
+        "agents",
+        "Copilot",
+        "reinforcement learning"
+      ],
       "notes": "RSS oficial comprobado el 18/10/2026. Filtrado por vocabulario de IA para excluir otras áreas de investigación."
     },
     {
@@ -233,7 +266,12 @@
       "feed_url": "https://techcrunch.com/category/artificial-intelligence/feed/",
       "type": "independent_media",
       "language": "en",
-      "topics": ["products", "business", "society", "research"],
+      "topics": [
+        "products",
+        "business",
+        "society",
+        "research"
+      ],
       "enabled": true,
       "refresh_seconds": 3600,
       "notes": "RSS de la sección de IA comprobado el 18/10/2026. Enlaces y fechas de publicación del propio medio."

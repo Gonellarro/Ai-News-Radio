@@ -1,4 +1,5 @@
-FROM python:3.12-slim AS base
+ARG PYTHON_IMAGE=python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+FROM ${PYTHON_IMAGE} AS base
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/app/src \
     PIP_DISABLE_PIP_VERSION_CHECK=1 HF_HOME=/models/.hf-cache \
     HF_HUB_DISABLE_TELEMETRY=1 HF_HUB_DISABLE_XET=1
@@ -12,6 +13,7 @@ RUN groupadd --gid 1000 tts && useradd --uid 1000 --gid 1000 --no-create-home tt
     && mkdir -p /app/data /voices /models /run/local-ai && chown -R tts:tts /app/data /voices /models /run/local-ai
 COPY --chown=tts:tts src ./src
 COPY --chown=tts:tts web ./web
+COPY --chown=tts:tts LICENSE ./LICENSE
 USER tts:tts
 EXPOSE 8791
 CMD ["python", "-m", "qwentts"]

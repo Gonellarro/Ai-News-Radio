@@ -1,0 +1,17 @@
+[
+  {
+    "service": "news-radio",
+    "source_head": "fe005cba5cf1208f7b75190e5b612514216b8d54",
+    "includes_uncommitted_work": true
+  },
+  {
+    "service": "orchestrator",
+    "source_head": "609a4b0e91f109fd18c33b372b709c117445ce5a",
+    "includes_uncommitted_work": false
+  },
+  {
+    "service": "qwentts",
+    "source_head": "68eac1e1dd82b424390323a6dc91bfd618c3d82c",
+    "includes_uncommitted_work": true
+  }
+]

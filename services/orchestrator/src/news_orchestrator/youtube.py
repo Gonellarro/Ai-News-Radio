@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from news_orchestrator import config, youtube_control as control, youtube_media
 from news_orchestrator.youtube_health import ProgressClock
 
-SOURCE = "http://127.0.0.1:8792/live/index.m3u8"
+SOURCE = os.environ.get("HLS_SOURCE_URL", "http://orchestrator:8792/live/index.m3u8")
 
 
 def now():

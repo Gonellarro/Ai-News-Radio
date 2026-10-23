@@ -30,6 +30,7 @@ export function mount(root, ctx) {
     enginePanel = h("section", { class: "panel" }),
     body = h("section", { class: "panel table-panel" });
   let qwenBase = "";
+  let voiceNotice = "";
   async function load() {
     const result = await perform(() => api("/api/narration"));
     if (!result) return;
@@ -42,6 +43,7 @@ export function mount(root, ctx) {
     } catch {}
     const library = await perform(() => api("/api/voices"));
     voices = library?.voices || [];
+    voiceNotice = library?.notice || "";
     render();
   }
   function render() {
@@ -155,6 +157,7 @@ export function mount(root, ctx) {
           ),
         ),
       );
+      if (voiceNotice) enginePanel.append(h("p", { class: "hint" }, voiceNotice));
     }
     if (tab === "production") {
       const jobs = (data?.jobs || []).filter((j) =>

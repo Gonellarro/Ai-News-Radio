@@ -1,0 +1,223 @@
+name: ${COMPOSE_PROJECT_NAME:-ai-news-radio}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "5m"
+    max-file: "2"
+
+x-app: &app
+  init: true
+  user: "${APP_UID:-1000}:${APP_GID:-1000}"
+  restart: unless-stopped
+  logging: *logging
+
+x-orchestrator: &orchestrator
+  <<: *app
+  image: ${ORCHESTRATOR_IMAGE:-ai-news-radio-orchestrator:local}
+  build: ./services/orchestrator
+  environment: &orchestrator-env
+    DATA_DIR: /app/data
+    CONFIG_DIR: /app/config
+    WEB_DIR: /app/web
+    NEWS_RADIO_URL: http://news-radio:8790
+    QWENTTS_URL: http://qwentts:8791
+    QWENTTS_PUBLIC_URL: ${QWENTTS_PUBLIC_URL:-http://localhost:8791}
+    HLS_SOURCE_URL: http://orchestrator:8792/live/index.m3u8
+    AI_RUNTIME_LOCK: /run/local-ai/inference.lock
+    OMP_NUM_THREADS: "1"
+    OPENBLAS_NUM_THREADS: "1"
+  volumes:
+    - ${STATE_DIR:-./state}/orchestrator/data:/app/data
+    - ${STATE_DIR:-./state}/orchestrator/config:/app/config:ro
+    - ${STATE_DIR:-./state}/ai-runtime:/run/local-ai
+  depends_on:
+    bootstrap:
+      condition: service_completed_successfully
+
+services:
+  bootstrap:
+    image: ${ORCHESTRATOR_IMAGE:-ai-news-radio-orchestrator:local}
+    build: ./services/orchestrator
+    user: "0:0"
+    restart: "no"
+    command: ["python", "/bootstrap/bootstrap.py"]
+    environment:
+      APP_UID: ${APP_UID:-1000}
+      APP_GID: ${APP_GID:-1000}
+      TTS_ENGINE: ${TTS_ENGINE:-piper}
+      INITIAL_AUTOMATION_ENABLED: ${INITIAL_AUTOMATION_ENABLED:-false}
+      CHANNEL_NAME: ${CHANNEL_NAME:-Noticias de inteligencia artificial}
+      CHANNEL_TOPIC: ${CHANNEL_TOPIC:-Inteligencia artificial}
+      SCHEDULE_TIMEZONE: ${SCHEDULE_TIMEZONE:-Europe/Madrid}
+    volumes:
+      - ${STATE_DIR:-./state}:/state
+      - ./config/examples:/defaults:ro
+      - ./scripts/bootstrap.py:/bootstrap/bootstrap.py:ro
+    logging: *logging
+
+  ollama:
+    <<: *app
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.40.5}
+    environment:
+      HOME: /models
+      OLLAMA_MODELS: /models/models
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: "0"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-hf.co/lmstudio-community/gemma-4-E2B-it-GGUF:Q4_K_M}
+    volumes:
+      - ${STATE_DIR:-./state}/ollama:/models
+    cpus: ${OLLAMA_CPUS:-2.0}
+    mem_limit: ${OLLAMA_MEMORY_LIMIT:-4g}
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  news-radio:
+    <<: *app
+    image: ${NEWS_RADIO_IMAGE:-ai-news-radio-news:local}
+    build:
+      context: ./services/news-radio
+      target: runtime
+    environment:
+      NEWS_RADIO_DATA_DIR: /app/data
+      NEWS_RADIO_CONFIG_DIR: /app/config
+      WEB_DIR: /app/web
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-hf.co/lmstudio-community/gemma-4-E2B-it-GGUF:Q4_K_M}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-300}
+      OLLAMA_KEEP_ALIVE: "0"
+      AI_RUNTIME_LOCK: /run/local-ai/inference.lock
+      NEWS_RADIO_REFRESH_SECONDS: ${SOURCE_REFRESH_SECONDS:-3600}
+      NEWS_RADIO_REDDIT_INTERVAL_SECONDS: "7200"
+      NEWS_RADIO_REDDIT_REQUEST_GAP_SECONDS: "1800"
+      NEWS_RADIO_REDDIT_COOLDOWN_SECONDS: "21600"
+      SEARXNG_URL: ${SEARXNG_URL:-}
+      SEARXNG_FALLBACK_ENGINES: ${SEARXNG_FALLBACK_ENGINES:-}
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${NEWS_RADIO_PORT:-8790}:8790"
+    volumes:
+      - ${STATE_DIR:-./state}/news-radio/config:/app/config
+      - ${STATE_DIR:-./state}/news-radio/data:/app/data
+      - ${STATE_DIR:-./state}/ai-runtime:/run/local-ai
+    cpus: ${NEWS_RADIO_CPUS:-0.5}
+    mem_limit: ${NEWS_RADIO_MEMORY_LIMIT:-256m}
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8790/health',timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  orchestrator:
+    <<: *orchestrator
+    environment: *orchestrator-env
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${DASHBOARD_PORT:-8792}:8792"
+    volumes:
+      - ${STATE_DIR:-./state}/orchestrator/data:/app/data
+      - ${STATE_DIR:-./state}/orchestrator/config:/app/config
+      - ${STATE_DIR:-./state}/ai-runtime:/run/local-ai
+    cpus: ${ORCHESTRATOR_CPUS:-1.0}
+    mem_limit: ${ORCHESTRATOR_MEMORY_LIMIT:-512m}
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      news-radio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8792/health',timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  broadcaster:
+    <<: *orchestrator
+    command: ["python", "-m", "news_orchestrator.broadcast"]
+    cpus: "0.5"
+    mem_limit: 192m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import time; from pathlib import Path; p=Path('/app/data/broadcast.json'); assert p.exists() and time.time()-p.stat().st_mtime<30"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  qwentts:
+    <<: *app
+    profiles: [qwen]
+    image: ${QWENTTS_IMAGE:-ai-news-radio-qwentts:local}
+    build: ./services/qwentts
+    environment:
+      PORT: "8791"
+      QWEN_MODEL_DIR: /models/qwen3-tts-0.6b-base
+      QWEN_MODEL_ID: Qwen/Qwen3-TTS-12Hz-0.6B-Base
+      QWEN_MODEL_REVISION: 5d83992436eae1d760afd27aff78a71d676296fc
+      QWEN_DTYPE: ${QWEN_DTYPE:-float32}
+      QWEN_THREADS: ${QWEN_THREADS:-2}
+      QWEN_JOB_TIMEOUT: ${QWEN_JOB_TIMEOUT:-1800}
+      QWEN_CHUNK_MODE: sentences
+      QWEN_CHUNK_CHARS: ${QWEN_CHUNK_CHARS:-160}
+      QWEN_CHUNK_PAUSE_MS: "160"
+      QWEN_DECODE_CHUNK_FRAMES: "64"
+      AI_RUNTIME_LOCK: /run/local-ai/inference.lock
+      OLLAMA_URL: http://ollama:11434
+      OMP_NUM_THREADS: ${QWEN_THREADS:-2}
+      MKL_NUM_THREADS: ${QWEN_THREADS:-2}
+      OPENBLAS_NUM_THREADS: ${QWEN_THREADS:-2}
+      NUMBA_NUM_THREADS: ${QWEN_THREADS:-2}
+      NUMBA_CACHE_DIR: /app/data/.numba-cache
+      HF_HOME: /models/.hf-cache
+      HF_HUB_DISABLE_XET: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TOKENIZERS_PARALLELISM: "false"
+    volumes:
+      - ${STATE_DIR:-./state}/qwentts/models:/models
+      - ${STATE_DIR:-./state}/qwentts/voices:/voices
+      - ${STATE_DIR:-./state}/qwentts/data:/app/data
+      - ${STATE_DIR:-./state}/ai-runtime:/run/local-ai
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${QWENTTS_PORT:-8791}:8791"
+    cpus: ${QWEN_CPUS:-2.0}
+    mem_limit: ${QWEN_MEMORY_LIMIT:-5500m}
+    memswap_limit: ${QWEN_MEMORY_LIMIT:-5500m}
+    pids_limit: 256
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8791/health',timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  youtube:
+    <<: *orchestrator
+    profiles: [youtube]
+    command: ["python", "-m", "news_orchestrator.youtube"]
+    cpus: "0.5"
+    mem_limit: 192m
+    stop_grace_period: 15s
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+      broadcaster:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json; from news_orchestrator.youtube_control import DIRECTORY,age; s=json.loads((DIRECTORY/'status.json').read_text()); assert age(s['updated_at'])<15"]
+      interval: 15s
+      timeout: 5s
+      retries: 10

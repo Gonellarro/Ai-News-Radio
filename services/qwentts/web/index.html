@@ -14,22 +14,17 @@
       <p id="resource-status" class="muted"></p>
       <p class="hint">El modelo se carga al generar y se libera al terminar. Comparte turno con la redacción de News Radio.</p>
     </section>
-    <div class="columns">
       <section class="panel">
-        <h2>1. Voces de referencia</h2>
-        <p class="muted">Una grabación limpia de una sola persona, sin música. Recomendamos entre 6 y 15 segundos.</p>
-        <form id="voice-form">
-          <label for="voice-name">Nombre de la voz</label><input id="voice-name" maxlength="100" required placeholder="Presentadora principal">
-          <label for="voice-file">Muestra de audio (3–30 segundos, máximo 12 MiB)</label><input id="voice-file" type="file" accept="audio/*" required>
-          <label for="voice-transcript">Transcripción literal de lo que dice la muestra</label><textarea id="voice-transcript" rows="4" maxlength="3000" required></textarea>
-          <button id="voice-save" type="submit">Guardar voz</button>
-        </form>
+        <div class="heading"><div><h2>Biblioteca de voces</h2><p id="voice-count" class="hint"></p></div><button id="voice-add" type="button">Añadir voz</button></div>
+        <p class="muted">Escucha una referencia, edítala o desactívala para dejar de usarla en nuevas locuciones. Los audios ya creados conservan su voz.</p>
+        <label for="voice-search">Buscar por nombre</label><input id="voice-search" type="search" placeholder="Buscar una voz…">
+        <label for="voice-filter">Mostrar</label><select id="voice-filter"><option value="all">Todas las voces</option><option value="active">Solo activas</option><option value="inactive">Solo desactivadas</option></select>
         <p id="voice-message" role="status" class="hint"></p>
-        <details><summary>Importar archivos de la carpeta voices</summary><p class="hint">Deja <code>nombre.wav</code> y <code>nombre.txt</code> en <code>/home/marti/docker/qwentts/voices/</code>.</p><button id="voice-import" type="button" class="secondary">Importar carpeta</button></details>
         <div id="voice-list" class="voice-list"></div>
+        <details><summary>Importar desde una carpeta (opcional)</summary><p class="hint">Deja <code>nombre.wav</code> y <code>nombre.txt</code> en <code>state/qwentts/voices/</code> dentro del proyecto (o en la ruta equivalente de STATE_DIR). También se admite MP3. Los originales se conservan y las voces eliminadas no se reimportan automáticamente.</p><label class="check"><input id="voice-restore" type="checkbox"> Incluir voces eliminadas previamente</label><button id="voice-import" type="button" class="secondary">Importar carpeta</button></details>
       </section>
       <section class="panel">
-        <h2>2. Generar una locución</h2>
+        <h2>Probar una voz · Generar una locución</h2>
         <form id="speech-form">
           <label for="speech-voice">Voz</label><select id="speech-voice" required></select>
           <label for="speech-language">Idioma del texto</label><select id="speech-language"><option value="Spanish">Español</option></select>
@@ -39,10 +34,28 @@
         </form>
         <p id="speech-message" role="status" class="hint"></p>
       </section>
-    </div>
     <section class="panel"><h2>Locuciones</h2><p class="hint">Puedes cerrar esta página: los trabajos siguen en la cola. Los audios terminados se conservan en disco.</p><div id="jobs" aria-live="polite"></div></section>
     <footer>Qwen3-TTS 0.6B Base · CPU · WAV y MP3 · Proyecto independiente de News Radio.</footer>
   </main>
+  <dialog id="voice-editor" aria-labelledby="voice-editor-title">
+    <form id="voice-form">
+      <h2 id="voice-editor-title">Añadir voz</h2>
+      <p class="hint">Una grabación limpia de una sola persona, sin música. Recomendamos entre 6 y 15 segundos.</p>
+      <label for="voice-name">Nombre de la voz</label><input id="voice-name" maxlength="100" required placeholder="Presentadora principal">
+      <label id="voice-file-label" for="voice-file">Muestra de audio (3–30 segundos, máximo 12 MiB)</label><input id="voice-file" type="file" accept="audio/*" required>
+      <audio id="voice-preview" controls preload="none" hidden></audio>
+      <label for="voice-transcript">Transcripción literal de lo que dice la muestra</label><textarea id="voice-transcript" rows="5" maxlength="3000" required></textarea>
+      <p class="hint">Si cambias la grabación, actualiza también su transcripción. Las noticias y locuciones que ya están generándose conservan su propia copia.</p>
+      <p id="voice-editor-message" class="error" role="status"></p>
+      <div class="actions"><button id="voice-save" type="submit">Guardar voz</button><button id="voice-cancel" class="secondary" type="button">Cancelar</button></div>
+    </form>
+  </dialog>
+  <dialog id="voice-delete-dialog" aria-labelledby="voice-delete-title">
+    <h2 id="voice-delete-title">Eliminar voz</h2><p id="voice-delete-description"></p>
+    <p class="hint">Se borrará la referencia de la biblioteca. Las noticias y locuciones existentes se conservan. Si importaste archivos desde la carpeta voices, sus originales se mantienen.</p>
+    <p id="voice-delete-message" class="error" role="status"></p>
+    <div class="actions"><button id="voice-delete-cancel" class="secondary" type="button" autofocus>Cancelar</button><button id="voice-delete-confirm" class="danger" type="button">Eliminar voz</button></div>
+  </dialog>
   <script src="/app.js" defer></script>
 </body>
 </html>

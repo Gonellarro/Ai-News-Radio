@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "channel_name": "Noticias de inteligencia artificial",
   "topic": "Inteligencia artificial",
   "query": "",
@@ -12,17 +12,10 @@
   "max_pending": 10,
   "balancing": {
     "strategy": "fair",
-    "weights": {
-      "xataka-ai": 2,
-      "techcrunch-ai": 2,
-      "reddit-localllama": 2,
-      "the-verge-ai": 2,
-      "google-ai": 2,
-      "deepmind-blog": 2
-    }
+    "weights": {}
   },
-  "voice_name": "cristina",
-  "tts_engine": "qwen",
+  "voice_name": "Qwen",
+  "tts_engine": "piper",
   "piper_voice": "es_ES-davefx-medium",
   "voice_mode": "random",
   "voice_names": [],
@@ -32,14 +25,14 @@
   "tts_language": "Spanish",
   "audio_intro_seconds": 1.0,
   "audio_outro_seconds": 2.0,
-  "intro_music_enabled": true,
+  "intro_music_enabled": false,
   "voice_normalization_enabled": true,
   "voice_loudness_lufs": -16.0,
   "voice_true_peak_dbtp": -2.0,
   "voice_loudness_range_lu": 7.0,
   "qwen_voice_id": "",
   "relevance": {
-    "mode": "rank",
+    "mode": "off",
     "max_evaluations_per_hour": 20,
     "interval_seconds": 3600,
     "influence": 0.6,

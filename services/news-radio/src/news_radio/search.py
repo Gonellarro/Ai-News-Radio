@@ -21,7 +21,9 @@ class SearchError(Exception):
 
 
 def _instance_url() -> str:
-    value = os.environ.get("SEARXNG_URL", "http://192.168.1.9:8888").strip().rstrip("/")
+    value = os.environ.get("SEARXNG_URL", "").strip().rstrip("/")
+    if not value:
+        raise SearchError("SearXNG no está configurado. Añade SEARXNG_URL en .env si quieres usar la búsqueda complementaria.", 503)
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise SearchError("La dirección de SearXNG no es válida. Revísala en el archivo .env.", 503)

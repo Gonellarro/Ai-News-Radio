@@ -26,8 +26,8 @@ class Pipeline:
             raise RuntimeError("Ya hay un orquestador utilizando esta base de datos.") from exc
         self.store = Store(config.DATA)
         self.store.recover()
-        self.news = Client("NEWS_RADIO_URL", "http://127.0.0.1:8790")
-        self.tts = Client("QWENTTS_URL", "http://127.0.0.1:8791")
+        self.news = Client("NEWS_RADIO_URL", "http://news-radio:8790")
+        self.tts = Client("QWENTTS_URL", "http://qwentts:8791")
         self.narration = narration.Narration(self.tts, self.store)
         self.stop = threading.Event()
         self.requested = threading.Event()
