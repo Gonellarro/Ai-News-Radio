@@ -1,0 +1,16 @@
+services:
+  news-radio:
+    build:
+      target: development
+    command: ["python", "-m", "news_radio"]
+    # Linux: reach the host's loopback-only Ollama without exposing it to the LAN.
+    network_mode: host
+    ports: !reset []
+    environment:
+      PORT: ${NEWS_RADIO_PORT:-8790}
+      OLLAMA_URL: ${OLLAMA_URL:-http://127.0.0.1:11434}
+    volumes:
+      - ./src:/app/src:ro
+      - ./web:/app/web:ro
+      - ./data:/app/data
+      - ./logs:/app/logs

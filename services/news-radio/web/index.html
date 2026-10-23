@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111522">
+  <title>News Radio · Buscador de IA</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <div class="brand-mark" aria-hidden="true">N</div>
+      <div>
+        <p class="eyebrow">NEWS RADIO · PROTOTIPO</p>
+        <h1>Radar de inteligencia artificial</h1>
+        <p class="subtitle">Noticias recogidas directamente de las fuentes. SearXNG amplía la exploración cuando lo necesites.</p>
+      </div>
+      <span class="connection">Fuentes directas + búsqueda opcional</span>
+    </header>
+
+    <section class="search-panel" aria-labelledby="search-title">
+      <h2 id="search-title">¿Qué está pasando?</h2>
+      <form id="search-form">
+        <label class="query-label" for="query" id="query-label">Filtrar noticias (opcional)</label>
+        <div class="query-row">
+          <input id="query" name="q" type="search" maxlength="300" placeholder="Deja vacío para ver las últimas noticias de todas las fuentes">
+          <button id="search-button" type="submit">Ver noticias</button>
+        </div>
+        <div class="filters">
+          <label>Origen
+            <select name="provider" id="provider">
+              <option value="direct">Fuentes directas</option>
+              <option value="searxng">SearXNG (complementario)</option>
+            </select>
+          </label>
+          <label id="platform-filter">Contenido
+            <select name="platform" id="platform">
+              <option value="web">Medios y fuentes oficiales</option>
+              <option value="social">Redes y comunidades</option>
+              <option value="reddit">Reddit</option>
+              <option value="mastodon">Mastodon</option>
+              <option value="bluesky">Bluesky</option>
+              <option value="all">Todas las publicaciones</option>
+            </select>
+          </label>
+          <label id="source-filter">Fuente
+            <select name="source_id" id="source-id">
+              <option value="">Todas las fuentes activas</option>
+            </select>
+          </label>
+          <label id="category-filter" hidden>Tipo de búsqueda
+            <select name="category" id="category">
+              <option value="news">Noticias</option>
+              <option value="general">Toda la web</option>
+            </select>
+          </label>
+          <label>Periodo
+            <select name="time_range" id="time-range">
+              <option value="day">Últimas 24 horas</option>
+              <option value="week">Última semana</option>
+              <option value="month">Último mes</option>
+              <option value="">Sin límite temporal</option>
+            </select>
+          </label>
+          <label><span id="language-label">Idioma de la fuente</span>
+            <select name="language" id="language">
+              <option value="all">Todos</option>
+              <option value="en">Inglés</option>
+              <option value="es">Español</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint filter-hint" id="filter-hint">Filtra los titulares y extractos guardados. Puedes consultar las fuentes en inglés o español; los textos no se traducen.</p>
+      </form>
+    </section>
+
+    <section class="sources-panel" aria-labelledby="sources-title">
+      <div class="sources-heading">
+        <h2 id="sources-title">Fuentes del canal</h2>
+        <button id="refresh-button" type="button">Actualizar fuentes</button>
+      </div>
+      <p id="sources-status" class="subtitle" aria-live="polite">Consultando el estado de las fuentes…</p>
+      <p class="hint filter-hint">La actualización respeta los plazos de cada fuente. Buscar y filtrar consulta únicamente la copia guardada.</p>
+      <details>
+        <summary>Ver fuentes y última actualización</summary>
+        <div id="sources-list" class="sources-list"></div>
+      </details>
+    </section>
+
+    <section class="sources-panel" aria-labelledby="editorial-title">
+      <div class="sources-heading">
+        <h2 id="editorial-title">Mesa de redacción · Español</h2>
+        <button id="ollama-check" type="button">Comprobar Ollama</button>
+      </div>
+      <p id="ollama-status" class="subtitle" aria-live="polite">Leyendo la configuración editorial…</p>
+      <p class="hint filter-hint">Elige «Redactar en español» en una noticia. Podrás descargar su texto, compararlo con el borrador y revisarlo antes de guardarlo.</p>
+      <details>
+        <summary>Instrucciones editoriales y últimos borradores</summary>
+        <p class="hint filter-hint">Edita <code>config/editorial.md</code> para cambiar el tono, la extensión y el enfoque. Se relee en cada generación, sin reiniciar.</p>
+        <pre id="editorial-instructions" class="editorial-instructions"></pre>
+        <h3>Últimos borradores guardados</h3>
+        <div id="editorial-drafts" class="draft-list"></div>
+      </details>
+    </section>
+
+    <section class="results-section" aria-live="polite" aria-busy="false">
+      <div class="results-heading">
+        <div>
+          <p class="eyebrow">EXPLORACIÓN</p>
+          <h2 id="results-title">Últimas noticias de las fuentes</h2>
+        </div>
+        <span id="result-count" class="result-count"></span>
+      </div>
+      <div id="status" class="status" hidden></div>
+      <div id="results" class="results-grid"></div>
+    </section>
+
+    <footer>
+      Las fuentes directas se revisan periódicamente y conservan su enlace y fecha de publicación. Las redes aportan señales por contrastar. SearXNG se consulta únicamente cuando eliges ese origen.
+    </footer>
+  </main>
+  <dialog id="editorial-dialog" aria-labelledby="editorial-dialog-title">
+    <div class="editorial-heading">
+      <div><p class="eyebrow">MESA DE REDACCIÓN</p><h2 id="editorial-dialog-title">Preparar noticia</h2></div>
+      <button id="editorial-close" type="button" class="secondary">Cerrar</button>
+    </div>
+    <p id="editorial-message" class="status" role="status"></p>
+    <div class="editorial-columns">
+      <section>
+        <h3>1. Material de origen</h3>
+        <p id="editorial-origin" class="subtitle"></p>
+        <a id="editorial-link" class="shared-link" target="_blank" rel="noopener noreferrer">Abrir publicación original ↗</a>
+        <p id="material-note" class="material-note"></p>
+        <a id="material-link" class="shared-link" target="_blank" rel="noopener noreferrer" hidden>Abrir fuente del texto ↗</a>
+        <label for="editorial-text">Texto que recibirá el modelo (editable, máximo 12.000 caracteres)</label>
+        <textarea id="editorial-text" maxlength="12000" rows="16"></textarea>
+        <div class="editorial-actions">
+          <button id="editorial-fetch" class="secondary" type="button">Descargar texto de la fuente</button>
+          <button id="editorial-generate" type="button">Generar borrador en español</button>
+        </div>
+        <p class="hint filter-hint">En redes se utiliza el enlace externo compartido. No se descargan comentarios. Si no se puede extraer el texto, puedes pegarlo aquí o usar el extracto indicado.</p>
+      </section>
+      <section>
+        <h3>2. Borrador para revisar</h3>
+        <p id="draft-meta" class="subtitle">El resumen aparecerá aquí. Se guarda automáticamente; puedes cerrar el panel mientras se genera.</p>
+        <div id="draft-output" hidden>
+          <label for="draft-title">Titular en español</label>
+          <input id="draft-title" type="text" maxlength="500">
+          <label for="draft-script">Guion para leer en voz alta</label>
+          <textarea id="draft-script" maxlength="12000" rows="15"></textarea>
+          <h4>Observaciones para el editor</h4>
+          <ul id="draft-notes"></ul>
+          <div class="editorial-actions">
+            <button id="draft-save" type="button">Guardar revisión</button>
+            <button id="draft-copy" type="button" class="secondary">Copiar texto</button>
+          </div>
+          <p class="hint filter-hint">Guardar conserva tu revisión junto al borrador original. No genera voz ni publica la noticia.</p>
+        </div>
+      </section>
+    </div>
+  </dialog>
+  <script src="/app.js" defer></script>
+  <script src="/editorial.js" defer></script>
+</body>
+</html>
