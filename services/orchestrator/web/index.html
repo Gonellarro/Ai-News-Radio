@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>News Radio · Control del canal</title>
+    <script src="/modules/theme-init.js"></script>
+    <link rel="stylesheet" href="/dashboard.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <a class="brand" href="#home"
+          ><span class="brand-mark">N<span>•</span></span
+          ><span>NEWS RADIO<small>CONTROL DEL CANAL</small></span></a
+        >
+        <nav aria-label="Secciones del canal">
+          <button data-view="home"><span>◉</span>Inicio · Directo</button>
+          <button data-view="youtube"><span>▷</span>YouTube</button>
+          <button data-view="news"><span>▤</span>Noticias</button>
+          <button data-view="playlist"><span>≡</span>Parrilla</button>
+          <button data-view="sources"><span>⌕</span>Búsqueda y fuentes</button>
+          <button data-view="voices"><span>♫</span>Voces y producción</button>
+          <button data-view="settings"><span>⚙</span>Panel de control</button>
+        </nav>
+        <div class="sidebar-bottom">
+          <span class="status-dot" id="connection-dot"></span
+          ><span id="connection">Conectando con el canal…</span
+          ><small>La emisión continúa al cerrar este panel.</small>
+        </div>
+      </aside>
+      <div class="workspace">
+        <header class="topbar">
+          <div class="channel-label">
+            <span class="eyebrow">ESTACIÓN DE NOTICIAS</span
+            ><strong id="channel-name">News Radio</strong>
+          </div>
+          <div class="top-status">
+            <span id="top-local" class="pill">Local · —</span
+            ><button id="top-youtube" class="pill" type="button">
+              YouTube · —</button
+            ><span id="top-playlist" class="pill">Parrilla · —</span
+            ><time id="clock"></time>
+          </div>
+        </header>
+        <main id="workspace" aria-label="Panel del canal">
+          <div class="view-heading">
+            <div>
+              <span id="view-eyebrow" class="eyebrow">CONTROL DEL CANAL</span>
+              <h1 id="view-title">Inicio · Directo</h1>
+            </div>
+            <p id="view-subtitle">Tu emisión y lo que viene después.</p>
+          </div>
+          <div id="views"></div>
+        </main>
+        <footer class="statusbar">
+          <span id="global-status">Esperando el estado del canal…</span
+          ><span id="updated-at">—</span>
+        </footer>
+      </div>
+    </div>
+    <div id="toast" role="status" hidden></div>
+    <dialog id="modal" aria-labelledby="modal-title"></dialog>
+    <script src="/vendor/hls.light.min.js" defer></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

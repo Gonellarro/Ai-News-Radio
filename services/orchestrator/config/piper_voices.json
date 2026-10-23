@@ -1,0 +1,17 @@
+{
+  "voices": [
+    {
+      "id": "es_ES-davefx-medium",
+      "name": "Davefx",
+      "label": "Davefx · Español (España)",
+      "language": "Spanish",
+      "revision": "c10ece1aade47bb51c153c893d14e5bf8e5b7117",
+      "base_path": "es/es_ES/davefx/medium",
+      "files": {
+        "model": {"name": "es_ES-davefx-medium.onnx", "size": 63201294, "sha256": "6658b03b1a6c316ee4c265a9896abc1393353c2d9e1bca7d66c2c442e222a917"},
+        "config": {"name": "es_ES-davefx-medium.onnx.json", "size": 4817, "sha256": "0e0dda87c732f6f38771ff274a6380d9252f327dca77aa2963d5fbdf9ec54842"},
+        "card": {"name": "MODEL_CARD", "size": 276, "sha256": "420703b5d8ea239b729f13d83f31eea9bae5fcb89447de23ebc94aa8a4768f95"}
+      }
+    }
+  ]
+}
